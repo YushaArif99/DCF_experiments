@@ -210,8 +210,9 @@ def converted_call(f, args, kwargs):
                 new_args,
                 new_kwargs,
         )
-
-    if is_user_defined(f):
+    
+    # If the function is wrapped, we don't need to go inside of it.
+    if is_user_defined(f) or hasattr(f, "wrapped_for_compiling"):
         if kwargs:
             return f(*args, **kwargs)
         else:
