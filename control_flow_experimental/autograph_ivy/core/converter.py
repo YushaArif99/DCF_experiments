@@ -4,7 +4,7 @@
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
+#         http://www.apache.org/licenses/LICENSE-2.0
 #
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,14 +19,14 @@ structures. These structures are referred to as contexts.
 
 The class hierarchy is as follows:
 
-    <your converter>
-      [extends] converter.Base
-        [extends] transformer.Base
-            [extends] gast.nodeTransformer
-          [uses] transformer.SourceInfo
-        [uses] converter.EntityContext
-          [uses] converter.ProgramContext
-          [uses] transformer.SourceInfo
+        <your converter>
+            [extends] converter.Base
+                [extends] transformer.Base
+                        [extends] gast.nodeTransformer
+                    [uses] transformer.SourceInfo
+                [uses] converter.EntityContext
+                    [uses] converter.ProgramContext
+                    [uses] transformer.SourceInfo
 
 converter.Base is a specialization of transformer.Base for AutoGraph. It's a
 very lightweight subclass that adds a `ctx` attribute holding the corresponding
@@ -42,17 +42,17 @@ ProgramContext should be shared across these entities.
 
 Below is the overall flow at conversion:
 
-    program_ctx = ProgramContext(<entities to convert>, <global settings>, ...)
-    while <program_ctx has more entities to convert>:
-      entity, source_info = <get next entity from program_ctx>
-      entity_ctx = EntityContext(program_ctx, source_info)
-      for <each ConverterClass>:
-        converter = ConverterClass(entity_ctx)
+        program_ctx = ProgramContext(<entities to convert>, <global settings>, ...)
+        while <program_ctx has more entities to convert>:
+            entity, source_info = <get next entity from program_ctx>
+            entity_ctx = EntityContext(program_ctx, source_info)
+            for <each ConverterClass>:
+                converter = ConverterClass(entity_ctx)
 
-        # May update entity_ctx and program_ctx
-        entity = converter.visit(entity)
+                # May update entity_ctx and program_ctx
+                entity = converter.visit(entity)
 
-      <add entity's dependencies to program_ctx>
+            <add entity's dependencies to program_ctx>
 
 Note that pyct contains a small number of transformers used for static analysis.
 These implement transformer.Base, rather than converter.Base, to avoid a
@@ -64,26 +64,26 @@ from control_flow_experimental.autograph_ivy.pyct import transformer
 
 
 class Base(transformer.Base):
-  """All converters should inherit from this class.
+    """All converters should inherit from this class.
 
-  Attributes:
-    ctx: EntityContext
-  """
+    Attributes:
+        ctx: EntityContext
+    """
 
-  def __init__(self, ctx):
-    super(Base, self).__init__(ctx)
+    def __init__(self, ctx):
+        super(Base, self).__init__(ctx)
 
-    self._used = False
-    self._ast_depth = 0
+        self._used = False
+        self._ast_depth = 0
 
-  def visit(self, node):
-    if not self._ast_depth:
-      if self._used:
-        raise ValueError('converter objects cannot be reused')
-      self._used = True
+    def visit(self, node):
+        if not self._ast_depth:
+            if self._used:
+                raise ValueError('converter objects cannot be reused')
+            self._used = True
 
-    self._ast_depth += 1
-    try:
-      return super(Base, self).visit(node)
-    finally:
-      self._ast_depth -= 1
+        self._ast_depth += 1
+        try:
+            return super(Base, self).visit(node)
+        finally:
+            self._ast_depth -= 1
