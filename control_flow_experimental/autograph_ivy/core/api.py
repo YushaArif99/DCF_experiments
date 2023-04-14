@@ -277,4 +277,12 @@ def to_functional_form(entity, program_ctx=None):
 
   transformed.ivy_module = module
   transformed.ivy_source_map = source_map
+
+  if hasattr(entity, "__self__"):
+    original = transformed
+    @functools.wraps(original)
+    def wrapped_transformed(*args, **kwargs):
+      return original(entity.__self__, *args, **kwargs)
+    transformed = wrapped_transformed
+
   return transformed

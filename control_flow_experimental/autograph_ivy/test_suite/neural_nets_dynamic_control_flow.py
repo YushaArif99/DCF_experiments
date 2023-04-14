@@ -26,7 +26,7 @@ def test_function(func_class, data, *constructor_args, backends=IVY_BACKENDS):
     converted_func = to_functional_form(model._forward)
 
     # Run the converted function and get its output
-    converted_output = converted_func(model, inputs)
+    converted_output = converted_func(inputs)
     print(f"Converted function output ({backend} backend): {converted_output}")
 
     # Perform the assertion that the outputs are the same
