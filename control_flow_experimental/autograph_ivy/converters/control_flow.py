@@ -162,7 +162,7 @@ class ControlFlowTransformer(converter.Base):
 
     def _create_variables(self, var_names):
             if not var_names:
-                    return gast.Return(value=gast.Constant(value=None, kind=None))
+                    return gast.Tuple(elts=[], ctx=gast.Load())
 
             var_nodes = []
             for var_name in var_names:
@@ -204,7 +204,6 @@ class ControlFlowTransformer(converter.Base):
                     orelse
                     return_nodes
                 undefined_assigns
-                import ivy
                 tuple_vars = ivy.if_else(
                     test,
                     body_name,
@@ -250,7 +249,6 @@ class ControlFlowTransformer(converter.Base):
                     def test_name(loop_vars):
                         return test
                     undefined_assigns
-                    import ivy
                     tuple_vars = ivy.while_loop(
                             test_name,
                             body_name,
@@ -296,12 +294,12 @@ class ControlFlowTransformer(converter.Base):
         origin_info.copy_origin(node, iterate_expansion)
 
         template = """
-            def body_name(iterate_arg_name,tuple_vars):
+            def body_name(iterate_arg_name,_v):
+                tuple_vars = _v
                 iterate_expansion
                 body
                 return_nodes
             undefined_assigns
-            import ivy
             tuple_vars = ivy.for_loop(
                     iterated,
                     body_name,

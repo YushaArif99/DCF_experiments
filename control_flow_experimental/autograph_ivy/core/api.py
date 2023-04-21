@@ -18,6 +18,8 @@ import functools
 import importlib
 import inspect
 import sys
+import ivy
+
 from control_flow_experimental.autograph_ivy.converters import break_statements
 from control_flow_experimental.autograph_ivy.converters import call_trees
 from control_flow_experimental.autograph_ivy.converters import conditional_expressions
@@ -285,5 +287,7 @@ def to_functional_form(entity, program_ctx=None):
         def wrapped_transformed(*args, **kwargs):
             return original(entity.__self__, *args, **kwargs)
         transformed = wrapped_transformed
+    
+    transformed.__globals__["ivy"] = ivy
 
     return transformed
