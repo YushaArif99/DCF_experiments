@@ -204,7 +204,8 @@ class ControlFlowTransformer(converter.Base):
                     orelse
                     return_nodes
                 undefined_assigns
-                tuple_vars = ivy.IfElse(
+                import ivy
+                tuple_vars = ivy.if_else(
                     test,
                     body_name,
                     orelse_name,
@@ -249,7 +250,8 @@ class ControlFlowTransformer(converter.Base):
                     def test_name(loop_vars):
                         return test
                     undefined_assigns
-                    tuple_vars = ivy.WhileLoop(
+                    import ivy
+                    tuple_vars = ivy.while_loop(
                             test_name,
                             body_name,
                             tuple_vars,
@@ -299,7 +301,8 @@ class ControlFlowTransformer(converter.Base):
                 body
                 return_nodes
             undefined_assigns
-            tuple_vars = ivy.ForLoop(
+            import ivy
+            tuple_vars = ivy.for_loop(
                     iterated,
                     body_name,
                     tuple_vars
