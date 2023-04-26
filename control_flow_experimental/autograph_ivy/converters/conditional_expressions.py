@@ -23,23 +23,23 @@ from control_flow_experimental.autograph_ivy.pyct import templates
 
 class ConditionalExpressionTransformer(converter.Base):
     """Converts conditional expressions to functional form."""
-
+    
+    
     def visit_IfExp(self, node):
+        node = self.generic_visit(node)
+
         template = '''
-                ivy.if_exp(
+                ivy.if_else(
                         test,
                         lambda: true_expr,
                         lambda: false_expr,
-                        expr_repr)
+                        ())
         '''
-        expr_repr = parser.unparse(node.test, include_encoding_marker=False).strip()
         return templates.replace_as_expression(
                 template,
                 test=node.test,
                 true_expr=node.body,
-                false_expr=node.orelse,
-                expr_repr=gast.Constant(expr_repr, kind=None))
-
+                false_expr=node.orelse)
 
 def transform(node, ctx):
     node = ConditionalExpressionTransformer(ctx).visit(node)

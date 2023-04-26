@@ -89,6 +89,7 @@ class ControlFlowTransformer(converter.Base):
                 basic_scope_vars.append(s)
             continue
         return frozenset(basic_scope_vars)
+    
 
     def _get_block_composite_vars(self, modified, live_in):
         # The scope variables corresponding to composite symbols (e.g. `self.x`).
@@ -204,6 +205,7 @@ class ControlFlowTransformer(converter.Base):
                     orelse
                     return_nodes
                 undefined_assigns
+                
                 tuple_vars = ivy.if_else(
                     test,
                     body_name,
@@ -224,6 +226,7 @@ class ControlFlowTransformer(converter.Base):
                     undefined_assigns=undefined_assigns)
             origin_info.copy_origin(node, new_nodes[-1])
             return new_nodes
+
 
     def visit_While(self, node):
         node = self.generic_visit(node)
@@ -249,6 +252,7 @@ class ControlFlowTransformer(converter.Base):
                     def test_name(loop_vars):
                         return test
                     undefined_assigns
+                    
                     tuple_vars = ivy.while_loop(
                             test_name,
                             body_name,
@@ -300,6 +304,7 @@ class ControlFlowTransformer(converter.Base):
                 body
                 return_nodes
             undefined_assigns
+            
             tuple_vars = ivy.for_loop(
                     iterated,
                     body_name,

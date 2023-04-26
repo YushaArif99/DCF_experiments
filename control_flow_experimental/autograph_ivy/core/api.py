@@ -64,7 +64,7 @@ class PyToIvy(transpiler.PyToPy):
             ag_internal.__dict__.update(inspect.getmodule(PyToIvy).__dict__)
             ag_internal.__dict__.update(list_ops.__dict__)
             # TODO(mdan): Add safeguards against name clashes.
-            self._extra_locals = {'ivy__': ag_internal}
+            self._extra_locals = {'ivy__': ag_internal, 'ivy': ivy}
         return self._extra_locals
 
     def initial_analysis(self, node, ctx):
@@ -287,7 +287,5 @@ def to_functional_form(entity, program_ctx=None):
         def wrapped_transformed(*args, **kwargs):
             return original(entity.__self__, *args, **kwargs)
         transformed = wrapped_transformed
-    
-    transformed.__globals__["ivy"] = ivy
 
     return transformed
