@@ -142,6 +142,7 @@ class ControlFlowTransformer(converter.Base):
                 live_out)
         composite_scope_vars = self._get_block_composite_vars(modified, live_in)
         scope_vars = tuple(basic_scope_vars | composite_scope_vars)
+        scope_vars = (v for v in scope_vars if v not in fn_scope.globals)
 
         # Variables that are modified inside the scope, but not defined
         # before entering it. Only simple variables must be defined. The
