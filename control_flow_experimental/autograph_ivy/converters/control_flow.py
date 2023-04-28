@@ -160,6 +160,8 @@ class ControlFlowTransformer(converter.Base):
         scope_vars = self.process_variables(scope_vars)
         nouts = len(scope_vars) - len(input_only)
 
+        scope_vars = list(set(scope_vars))
+
         return scope_vars, undefined, nouts
 
     def _create_variables(self, var_names):
