@@ -19,6 +19,7 @@ import importlib
 import inspect
 import sys
 import ivy
+from types import FunctionType, MethodType
 
 from control_flow_experimental.autograph_ivy.converters import break_statements
 from control_flow_experimental.autograph_ivy.converters import call_trees
@@ -269,6 +270,11 @@ def _call_unconverted(f, args, kwargs):
 
 def to_functional_form(entity, program_ctx=None):
     """Applies autograph_ivy to entity."""
+
+    if hasattr(entity, "__call__") and callable(entity) and not isinstance(entity, (FunctionType, MethodType)):
+        new_call = to_functional_form(entity.__call__)
+        entity.__call__ = new_call
+        return entity
 
     # TODO(mdan): Put these extra fields inside __autograph_ivy_info__.
     if not hasattr(entity, '__code__'):

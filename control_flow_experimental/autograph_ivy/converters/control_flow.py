@@ -290,26 +290,25 @@ class ControlFlowTransformer(converter.Base):
         tuple_vars = self._create_variables(loop_vars)
         return_nodes = gast.Return(value=tuple_vars)
 
-        # iterate_arg_name holds a single arg with the iterates, which may be a
+        # itr holds a single arg with the iterates, which may be a
         # tuple.
-        iterate_arg_name = self.ctx.namer.new_symbol('itr', reserved)
+        itr = self.ctx.namer.new_symbol('itr', reserved)
         template = """
-            iterates = iterate_arg_name
+            node_target = itr
         """
         iterate_expansion = templates.replace(
-                template, iterate_arg_name=iterate_arg_name, iterates=node.target)
+                template, itr=itr, iterates=node.target)
         origin_info.copy_origin(node, iterate_expansion)
 
         template = """
-            def body_name(iterate_arg_name,_v):
+            def body_name(itr, _v):
                 tuple_vars = _v
                 iterate_expansion
                 body
                 return_nodes
             undefined_assigns
-            
             tuple_vars = ivy.for_loop(
-                    iterated,
+                    node_itr,
                     body_name,
                     tuple_vars
                     )
@@ -318,9 +317,9 @@ class ControlFlowTransformer(converter.Base):
                 template,
                 body=node.body,
                 body_name=self.ctx.namer.new_symbol('loop_body', reserved),
-                iterate_arg_name=iterate_arg_name,
+                iterate_arg_name=itr,
                 iterate_expansion=iterate_expansion,
-                iterated=node.iter,
+                node_itr=node.iter,
                 undefined_assigns=undefined_assigns,
                 tuple_vars=tuple_vars,
                 return_nodes=return_nodes)
