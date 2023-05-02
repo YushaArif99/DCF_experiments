@@ -154,7 +154,7 @@ def is_unsupported(o):
 
     if any(
             _is_of_known_loaded_module(o, m)
-            for m in ('ivy', 'torch', 'tf', 'jax', 'haiku')):
+            for m in ('ivy', 'torch', 'tf', 'jax', 'haiku', 'paddle')):
         return True
 
     return False
@@ -165,7 +165,7 @@ def is_user_defined(func):
         return False
 
     # Check if the function is one of the specified functions
-    if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku"]:
+    if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
         return False
 
     # If none of the above conditions are met, the function is user-defined

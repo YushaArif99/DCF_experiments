@@ -1,7 +1,7 @@
 from control_flow_experimental.autograph_ivy.core.api import to_functional_form
 import ivy
 
-IVY_BACKENDS = ["numpy", "torch", "jax", "tensorflow"]
+IVY_BACKENDS = ["numpy", "torch", "jax", "tensorflow", "paddle"]
 
 def test_function(func_class, data, *constructor_args, backends=IVY_BACKENDS):
 
