@@ -118,7 +118,7 @@ class ControlFlowTransformer(converter.Base):
 
     def extract_variable_name(self, expr):
             node = gast.parse(expr, mode='eval')
-            if isinstance(node.body, gast.Subscript):
+            if isinstance(node.body, (gast.Subscript, gast.Attribute)):
                     return node.body.value.id
             else:
                     return node.body.id
@@ -297,7 +297,7 @@ class ControlFlowTransformer(converter.Base):
             node_target = itr
         """
         iterate_expansion = templates.replace(
-                template, itr=itr, iterates=node.target)
+                template, itr=itr, node_target=node.target)
         origin_info.copy_origin(node, iterate_expansion)
 
         template = """
