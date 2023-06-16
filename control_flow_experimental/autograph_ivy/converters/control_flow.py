@@ -121,11 +121,8 @@ class ControlFlowTransformer(converter.Base):
     def _get_block_vars(self, node, modified):
         """Determines the variables affected inside a control flow statement."""
         defined_in = anno.getanno(node, anno.Static.DEFINED_VARS_IN)
-        print("defined in",defined_in)
         live_in = anno.getanno(node, anno.Static.LIVE_VARS_IN)
-        print("live in",live_in)
         live_out = anno.getanno(node, anno.Static.LIVE_VARS_OUT)
-        print("live out",live_out)
         fn_scope = self.state[_Function].scope
 
         basic_scope_vars = self._get_block_basic_vars(
@@ -133,10 +130,8 @@ class ControlFlowTransformer(converter.Base):
                 modified,
                 live_in,
                 live_out)
-        print("basic scope vars", basic_scope_vars)
         composite_scope_vars = self._get_block_composite_vars(modified, live_in)
         scope_vars = tuple(basic_scope_vars | composite_scope_vars)
-        print("scope vars",scope_vars)
         scope_vars = (v for v in scope_vars if v not in fn_scope.globals)
 
 
@@ -157,8 +152,6 @@ class ControlFlowTransformer(converter.Base):
         nouts = len(scope_vars) - len(input_only)
 
         scope_vars = list(set(scope_vars))
-
-        print("scope vars",scope_vars)
 
         return scope_vars, undefined, nouts
 
