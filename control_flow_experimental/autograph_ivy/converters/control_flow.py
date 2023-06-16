@@ -47,22 +47,6 @@ class ControlFlowTransformer(converter.Base):
             fn.scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
             return self.generic_visit(node)
 
-    def _create_nonlocal_declarations(self, vars_):
-        vars_ = set(vars_)
-        results = []
-        global_vars = self.state[_Function].scope.globals & vars_
-
-        if global_vars:
-            results.append(gast.Global([str(v) for v in global_vars]))
-
-        nonlocal_vars = [
-                v for v in vars_ if not v.is_composite() and v not in global_vars]
-        if nonlocal_vars:
-            results.append(gast.Nonlocal([str(v) for v in nonlocal_vars]))
-
-        return results
-
-
     def _create_undefined_assigns(self, undefined_symbols):
         assignments = []
         for s in undefined_symbols:
@@ -76,18 +60,23 @@ class ControlFlowTransformer(converter.Base):
                     symbol_name=gast.Constant(s.ssf(), kind=None))
         return assignments
 
-    def _get_block_basic_vars(self, modified, live_in, live_out):
+    def _get_block_basic_vars(self, defined_in, modified, live_in, live_out):
         nonlocals = self.state[_Function].scope.nonlocals
         basic_scope_vars = []
-        for s in modified:
+        for s in live_in:
             if s.is_composite():
-                # TODO(mdan): Raise an error when this happens for a TF scope.
                 continue
-            # Variables not live into or out of the scope are considered local to the
-            # scope.
-            if s in live_in or s in live_out or s in nonlocals:
+            if s in defined_in or s in modified:
                 basic_scope_vars.append(s)
             continue
+        
+        for s in live_out:
+            if s.is_composite():
+                continue
+            if s in defined_in or s in modified:
+                basic_scope_vars.append(s)
+            continue
+        
         return frozenset(basic_scope_vars)
     
 
@@ -132,17 +121,24 @@ class ControlFlowTransformer(converter.Base):
     def _get_block_vars(self, node, modified):
         """Determines the variables affected inside a control flow statement."""
         defined_in = anno.getanno(node, anno.Static.DEFINED_VARS_IN)
+        print("defined in",defined_in)
         live_in = anno.getanno(node, anno.Static.LIVE_VARS_IN)
+        print("live in",live_in)
         live_out = anno.getanno(node, anno.Static.LIVE_VARS_OUT)
+        print("live out",live_out)
         fn_scope = self.state[_Function].scope
 
         basic_scope_vars = self._get_block_basic_vars(
+                defined_in,
                 modified,
                 live_in,
                 live_out)
+        print("basic scope vars", basic_scope_vars)
         composite_scope_vars = self._get_block_composite_vars(modified, live_in)
         scope_vars = tuple(basic_scope_vars | composite_scope_vars)
+        print("scope vars",scope_vars)
         scope_vars = (v for v in scope_vars if v not in fn_scope.globals)
+
 
         # Variables that are modified inside the scope, but not defined
         # before entering it. Only simple variables must be defined. The
@@ -161,6 +157,8 @@ class ControlFlowTransformer(converter.Base):
         nouts = len(scope_vars) - len(input_only)
 
         scope_vars = list(set(scope_vars))
+
+        print("scope vars",scope_vars)
 
         return scope_vars, undefined, nouts
 
@@ -322,6 +320,7 @@ class ControlFlowTransformer(converter.Base):
                 node_itr=node.iter,
                 undefined_assigns=undefined_assigns,
                 tuple_vars=tuple_vars,
+                itr=itr,
                 return_nodes=return_nodes)
         origin_info.copy_origin(node, new_nodes[-1])
         return new_nodes
