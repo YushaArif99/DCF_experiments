@@ -201,7 +201,7 @@ class ControlFlowTransformer(converter.Base):
                 undefined_assigns
                 
                 tuple_vars = ivy.if_else(
-                    test,
+                    lambda *_: test,
                     body_name,
                     orelse_name,
                     tuple_vars,
