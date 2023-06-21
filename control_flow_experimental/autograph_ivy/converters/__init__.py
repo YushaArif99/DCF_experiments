@@ -20,6 +20,7 @@ from . import continue_statements
 from . import functions
 from . import list_comprehensions
 from . import return_statements
+from . import assigns
 """
 Naming conventions:
  * each converter should specialize on a single idiom; be consistent with
