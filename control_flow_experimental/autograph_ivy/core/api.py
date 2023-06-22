@@ -29,9 +29,11 @@ from control_flow_experimental.autograph_ivy.converters import control_flow
 from control_flow_experimental.autograph_ivy.converters import functions
 from control_flow_experimental.autograph_ivy.converters import return_statements
 from control_flow_experimental.autograph_ivy.converters import list_comprehensions
+from control_flow_experimental.autograph_ivy.converters import boolean_operators
 from control_flow_experimental.autograph_ivy.converters import lists
 from control_flow_experimental.autograph_ivy.converters import slices
 import control_flow_experimental.autograph_ivy.core.list_ops as list_ops
+import control_flow_experimental.autograph_ivy.core.bool_ops as bool_ops
 from control_flow_experimental.autograph_ivy.core import unsupported_features_checker
 from control_flow_experimental.autograph_ivy.pyct import anno
 from control_flow_experimental.autograph_ivy.pyct import cfg
@@ -40,7 +42,7 @@ from control_flow_experimental.autograph_ivy.pyct import qual_names
 from control_flow_experimental.autograph_ivy.pyct import transpiler
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import activity
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import reaching_definitions
-
+import pytorch_fx.fx as fx 
 
 # Actual source code transformation
 #
@@ -64,8 +66,9 @@ class PyToIvy(transpiler.PyToPy):
             ag_internal = importlib.util.module_from_spec(module_spec)
             ag_internal.__dict__.update(inspect.getmodule(PyToIvy).__dict__)
             ag_internal.__dict__.update(list_ops.__dict__)
+            ag_internal.__dict__.update(bool_ops.__dict__)
             # TODO(mdan): Add safeguards against name clashes.
-            self._extra_locals = {'ivy__': ag_internal, 'ivy': ivy}
+            self._extra_locals = {'ivy__': ag_internal, 'ivy': ivy, 'fx': fx}
         return self._extra_locals
 
     def initial_analysis(self, node, ctx):
@@ -98,10 +101,14 @@ class PyToIvy(transpiler.PyToPy):
         node = control_flow.transform(node, ctx)
         node = conditional_expressions.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
+        node = boolean_operators.transform(node, ctx)
         return node
 
 
 def return_none_or_val(retval, do_return):
+    from pytorch_fx.fx.proxy import Proxy
+    if isinstance(do_return, Proxy):
+        return retval
     if do_return:
         return retval
     else:
@@ -155,9 +162,11 @@ def is_unsupported(o):
 
     if any(
             _is_of_known_loaded_module(o, m)
-            for m in ('ivy', 'torch', 'tf', 'jax', 'haiku', 'paddle')):
+            for m in ('torch', 'tf', 'jax', 'haiku', 'paddle')):
         return True
 
+    if o.__name__ in ("check_elem_in_list"):
+        return True 
     return False
 
 def is_user_defined(func):
@@ -166,7 +175,7 @@ def is_user_defined(func):
         return False
 
     # Check if the function is one of the specified functions
-    if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
+    if any(func.__module__.__contains__(m) for m in ["ivy", "tf", "torch", "jax", "haiku"]):
         return False
 
     # If none of the above conditions are met, the function is user-defined

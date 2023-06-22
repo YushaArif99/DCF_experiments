@@ -19,7 +19,8 @@ from . import conditional_expressions
 from . import continue_statements
 from . import functions
 from . import list_comprehensions
-from . import return_statements
+from . import return_statements 
+from . import boolean_operators
 """
 Naming conventions:
  * each converter should specialize on a single idiom; be consistent with

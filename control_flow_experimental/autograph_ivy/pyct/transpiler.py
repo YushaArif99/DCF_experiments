@@ -117,11 +117,20 @@ def _wrap_into_factory(nodes, entity_name, inner_factory_name,
             for name in factory_args
     ]
 
+    # Create a list of nodes for the wrap function calls
+    wrap_calls = []
+    for name in ['len', 'min', 'max', 'range', 'list']: # wrap builtins
+        template = """
+            fx.wrap(name, dynamic=True)
+        """
+        wrap_calls.extend(templates.replace(template, name=name))
+
     template = """
         future_imports
         def outer_factory_name():
             dummy_closure_defs
             def inner_factory_name(factory_args):
+                wrap_calls
                 entity_defs
                 return entity_name
             return inner_factory_name
@@ -134,7 +143,8 @@ def _wrap_into_factory(nodes, entity_name, inner_factory_name,
             factory_args=factory_args,
             future_imports=future_imports,
             inner_factory_name=inner_factory_name,
-            outer_factory_name=outer_factory_name)
+            outer_factory_name=outer_factory_name,
+            wrap_calls=wrap_calls)
 
 
 class _PythonFnFactory(object):
