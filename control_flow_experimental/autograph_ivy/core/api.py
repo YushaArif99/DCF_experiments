@@ -169,9 +169,10 @@ def is_user_defined(func):
     if inspect.isbuiltin(func):
         return False
 
-    # Check if the function is one of the specified functions
-    if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
-        return False
+    if hasattr(func,"__module__"):   
+        # Check if the function is one of the specified functions
+        if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
+            return False
 
     # If none of the above conditions are met, the function is user-defined
     return True
@@ -251,7 +252,6 @@ def converted_call(f, args, kwargs):
     elif (hasattr(target_entity.__code__, 'co_filename') and
                 target_entity.__code__.co_filename == '<string>'):
         return _call_unconverted(f, args, kwargs)
-
     converted_f = to_functional_form(target_entity)
     if kwargs is not None:
         result = converted_f(*effective_args, **kwargs)
