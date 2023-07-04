@@ -278,12 +278,15 @@ def to_functional_form(entity, program_ctx=None):
     if isinstance(entity, (BuiltinFunctionType, BuiltinMethodType)):
         return entity
 
+    if hasattr(entity, "_is_ivy_graph"):
+        return to_functional_form(entity._scripted_call)
+    
     functionlike = (FunctionType, MethodType,)
     if hasattr(entity, "__call__") and callable(entity) and not isinstance(entity, functionlike):
         if entity.__call__ is not entity:
             new_call = to_functional_form(entity.__call__)
-            entity.__call__ = new_call
-            return entity
+            entity.__call__ = new_call # doesn't work for some reason
+            return new_call
 
     # TODO(mdan): Put these extra fields inside __autograph_ivy_info__.
     if not hasattr(entity, '__code__'):

@@ -34,10 +34,10 @@ class ConditionalExpressionTransformer(converter.Base):
         # that all local variables are considered parameters.
         template = '''
                 ivy.if_else(
-                        lambda *_: test,
+                        test,
                         lambda *_: true_expr,
                         lambda *_: false_expr,
-                        tuple(locals().values()))
+                        tuple(locals().valus()))
         '''
         ret = templates.replace_as_expression(
                 template,

@@ -275,7 +275,7 @@ class GenericTranspiler(object):
         Raises:
             NotImplementedError: if the type of obj is not handled.
         """
-        if inspect.isfunction(obj) or inspect.ismethod(obj):
+        if inspect.isfunction(obj) or inspect.ismethod(obj) or isinstance(obj, str):
             return self.transform_function(obj, user_context)
 
         raise NotImplementedError('Non-function: {}'.format(type(obj)))
@@ -337,8 +337,8 @@ class GenericTranspiler(object):
         """
         future_features = inspect_utils.getfutureimports(fn)
         node, source = parser.parse_entity(fn, future_features=future_features)
-
-        origin_info.resolve_entity(node, source, fn)
+        if not hasattr(fn, "source_code"):
+            origin_info.resolve_entity(node, source, fn)
 
         namespace = inspect_utils.getnamespace(fn)
         namer = naming.Namer(namespace)
