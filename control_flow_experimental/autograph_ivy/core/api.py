@@ -277,9 +277,6 @@ def to_functional_form(entity, program_ctx=None):
 
     if isinstance(entity, (BuiltinFunctionType, BuiltinMethodType)):
         return entity
-
-    if hasattr(entity, "_is_ivy_graph"):
-        return to_functional_form(entity._scripted_call)
     
     functionlike = (FunctionType, MethodType,)
     if hasattr(entity, "__call__") and callable(entity) and not isinstance(entity, functionlike):
