@@ -37,7 +37,7 @@ class ConditionalExpressionTransformer(converter.Base):
                         test,
                         lambda *_: true_expr,
                         lambda *_: false_expr,
-                        tuple(locals().valus()))
+                        tuple(locals().values()))
         '''
         ret = templates.replace_as_expression(
                 template,
