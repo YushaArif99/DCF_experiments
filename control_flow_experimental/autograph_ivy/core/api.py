@@ -42,8 +42,9 @@ from control_flow_experimental.autograph_ivy.pyct import qual_names
 from control_flow_experimental.autograph_ivy.pyct import transpiler
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import activity
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import reaching_definitions
-import pytorch_fx.fx as fx 
-
+import ivy_fx.fx as fx 
+from ivy_fx.fx.proxy import Proxy
+import graph_compiler.globals as glob
 # Actual source code transformation
 #
 #######################################################
@@ -99,14 +100,12 @@ class PyToIvy(transpiler.PyToPy):
         #node = slices.transform(node, ctx)
         node = call_trees.transform(node, ctx)
         node = control_flow.transform(node, ctx)
-        node = conditional_expressions.transform(node, ctx)
+        #node = conditional_expressions.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
         node = boolean_operators.transform(node, ctx)
         return node
 
-
 def return_none_or_val(retval, do_return):
-    from pytorch_fx.fx.proxy import Proxy
     if isinstance(do_return, Proxy):
         return retval
     if do_return:
@@ -153,7 +152,9 @@ def _is_known_loaded_type(f, module_name, entity_name):
 def is_unsupported(o):
     """Checks whether an entity is supported."""
 
-
+    #Todo: not sure why this is needed?? I think we can remove this 
+    backend_modules = ['torch', 'tf', 'jax', 'haiku', 'paddle']
+    builtin_modules = ['logging',]
     if _is_known_loaded_type(o, 'functools', '_lru_cache_wrapper'):
         return True
 
@@ -162,11 +163,15 @@ def is_unsupported(o):
 
     if any(
             _is_of_known_loaded_module(o, m)
-            for m in ('torch', 'tf', 'jax', 'haiku', 'paddle')):
+            for m in (builtin_modules)):
         return True
-
-    if o.__name__ in ("check_elem_in_list"):
+    
+    if inspect.isbuiltin(o):
+        return True
+    
+    if not o.__module__ or o.__module__.__contains__('ivy.utils'):
         return True 
+    
     return False
 
 def is_user_defined(func):
@@ -224,7 +229,7 @@ def converted_call(f, args, kwargs):
         )
     
     # If the function is wrapped, we don't need to go inside of it.
-    if is_user_defined(f) or hasattr(f, "wrapped_for_compiling"):
+    if hasattr(f, "wrapped_for_compiling") or hasattr(f, "wrapped_for_tracing"):
         if kwargs:
             return f(*args, **kwargs)
         else:
@@ -233,6 +238,15 @@ def converted_call(f, args, kwargs):
     if is_unsupported(f):
         return _call_unconverted(f, args, kwargs)
 
+    # for dummy tracing 
+    if f.__name__ in glob.DUMMY_PLACEHOLDER_FNS:
+        # call the placeholder function in this case
+        placeholder_fn = glob.DUMMY_PLACEHOLDER_FNS[f.__name__] 
+        if kwargs:
+            return placeholder_fn(*args, **kwargs)
+        else:
+            return placeholder_fn(*args)
+        ()
     # if inspect_utils.isbuiltin(f) or str(f).__contains__('ivy') or hasattr(f,"__wrapped__"):
     #     if kwargs:
     #         return f(*args, **kwargs)
@@ -291,6 +305,7 @@ def to_functional_form(entity, program_ctx=None):
                                          'expose a __code__ object. If this is a @tf.function,'
                                          ' try passing f.python_function instead.')
 
+    entity= inspect.unwrap(entity)
     transformed, module, source_map = PyToIvy().transform(entity, program_ctx)
 
     transformed.ivy_module = module
