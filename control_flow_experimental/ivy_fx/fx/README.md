@@ -19,7 +19,7 @@ where:
 
 ```python
 import jax.numpy as jnp
-import ivy_fx.fx as fx 
+import control_flow_experimental.ivy_fx.fx as fx 
 from control_flow_experimental.autograph_ivy.core.api import to_functional_form
 
 def foo(x,y, z=None):

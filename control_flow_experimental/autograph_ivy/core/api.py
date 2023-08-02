@@ -45,8 +45,8 @@ from control_flow_experimental.autograph_ivy.pyct.static_analysis import activit
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import (
     reaching_definitions,
 )
-import ivy_fx.fx as fx
-from ivy_fx.fx.proxy import Proxy
+import control_flow_experimental.ivy_fx.fx as fx
+from control_flow_experimental.ivy_fx.fx.proxy import Proxy
 import graph_compiler.globals as glob
 
 
