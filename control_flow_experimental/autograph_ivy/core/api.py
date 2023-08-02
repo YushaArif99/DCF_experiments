@@ -19,7 +19,7 @@ import importlib
 import inspect
 import sys
 import ivy
-from types import FunctionType, MethodType
+from types import FunctionType, MethodType, BuiltinFunctionType, BuiltinMethodType
 
 from control_flow_experimental.autograph_ivy.converters import break_statements
 from control_flow_experimental.autograph_ivy.converters import call_trees
@@ -30,6 +30,8 @@ from control_flow_experimental.autograph_ivy.converters import functions
 from control_flow_experimental.autograph_ivy.converters import return_statements
 from control_flow_experimental.autograph_ivy.converters import list_comprehensions
 from control_flow_experimental.autograph_ivy.converters import boolean_operators
+from control_flow_experimental.autograph_ivy.converters import assigns
+from control_flow_experimental.autograph_ivy.converters import comparison
 from control_flow_experimental.autograph_ivy.converters import lists
 from control_flow_experimental.autograph_ivy.converters import slices
 import control_flow_experimental.autograph_ivy.core.list_ops as list_ops
@@ -98,13 +100,15 @@ class PyToIvy(transpiler.PyToPy):
         # canonicalization creates.
         node = continue_statements.transform(node, ctx)
         node = return_statements.transform(node, ctx)
-        # node = lists.transform(node, ctx)
-        # node = slices.transform(node, ctx)
+        #node = lists.transform(node, ctx)
+        #node = slices.transform(node, ctx)
         node = call_trees.transform(node, ctx)
         node = control_flow.transform(node, ctx)
-        # node = conditional_expressions.transform(node, ctx)
+        #node = conditional_expressions.transform(node, ctx)
+        #node = comparison.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
         node = boolean_operators.transform(node, ctx)
+        #node = assigns.transform(node, ctx)
         return node
 
 
@@ -263,7 +267,6 @@ def converted_call(f, args, kwargs):
         and target_entity.__code__.co_filename == "<string>"
     ):
         return _call_unconverted(f, args, kwargs)
-
     converted_f = to_functional_form(target_entity)
     if kwargs is not None:
         result = converted_f(*effective_args, **kwargs)
@@ -287,14 +290,15 @@ def _call_unconverted(f, args, kwargs):
 def to_functional_form(entity, program_ctx=None):
     """Applies autograph_ivy to entity."""
 
-    if (
-        hasattr(entity, "__call__")
-        and callable(entity)
-        and not isinstance(entity, (FunctionType, MethodType))
-    ):
-        new_call = to_functional_form(entity.__call__)
-        entity.__call__ = new_call
-        return entity
+    if isinstance(entity, (BuiltinFunctionType, BuiltinMethodType)):
+        return entity #??
+    
+    functionlike = (FunctionType, MethodType,)
+    if hasattr(entity, "__call__") and callable(entity) and not isinstance(entity, functionlike):
+        if entity.__call__ is not entity:
+            new_call = to_functional_form(entity.__call__)
+            entity.__call__ = new_call # doesn't work for some reason
+            return new_call
 
     # TODO(mdan): Put these extra fields inside __autograph_ivy_info__.
     if not hasattr(entity, "__code__"):

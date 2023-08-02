@@ -36,7 +36,7 @@ class _Function(object):
 
 
 class ControlFlowTransformer(converter.Base):
-    """Transforms control flow structures like loops an conditionals."""
+    """Transforms control flow structures like loops and conditionals."""
 
     def visit_Lambda(self, node):
         with self.state[_Function] as fn:
@@ -69,14 +69,14 @@ class ControlFlowTransformer(converter.Base):
             if s in defined_in or s in modified:
                 basic_scope_vars.append(s)
             continue
-
+        
         for s in live_out:
             if s.is_composite():
                 continue
             if s in defined_in or s in modified:
                 basic_scope_vars.append(s)
             continue
-
+        
         return frozenset(basic_scope_vars)
 
     def _get_block_composite_vars(self, modified, live_in):
@@ -139,11 +139,14 @@ class ControlFlowTransformer(converter.Base):
         fn_scope = self.state[_Function].scope
 
         basic_scope_vars = self._get_block_basic_vars(
-            defined_in, modified, live_in, live_out
-        )
+                defined_in,
+                modified,
+                live_in,
+                live_out)
         composite_scope_vars = self._get_block_composite_vars(modified, live_in)
         scope_vars = tuple(basic_scope_vars | composite_scope_vars)
         scope_vars = (v for v in scope_vars if v not in fn_scope.globals)
+
 
         # Variables that are modified inside the scope, but not defined
         # before entering it. Only simple variables must be defined. The

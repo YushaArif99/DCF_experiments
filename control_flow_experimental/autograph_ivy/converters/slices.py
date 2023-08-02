@@ -16,9 +16,8 @@
 
 import gast
 
-from tensorflow.python.autograph.core import converter
-from tensorflow.python.autograph.lang import directives
-from tensorflow.python.autograph.pyct import templates
+from control_flow_experimental.autograph_ivy.core import converter
+from control_flow_experimental.autograph_ivy.pyct import templates
 
 
 class SliceTransformer(converter.Base):

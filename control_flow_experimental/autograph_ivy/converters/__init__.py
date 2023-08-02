@@ -21,6 +21,9 @@ from . import functions
 from . import list_comprehensions
 from . import return_statements 
 from . import boolean_operators
+from . import return_statements
+from . import assigns
+from . import comparison
 """
 Naming conventions:
  * each converter should specialize on a single idiom; be consistent with

@@ -20,6 +20,8 @@ from control_flow_experimental.autograph_ivy.core import converter
 from control_flow_experimental.autograph_ivy.pyct import parser
 from control_flow_experimental.autograph_ivy.pyct import templates
 
+from control_flow_experimental.autograph_ivy.pyct import anno
+
 
 class ConditionalExpressionTransformer(converter.Base):
     """Converts conditional expressions to functional form."""
@@ -28,18 +30,21 @@ class ConditionalExpressionTransformer(converter.Base):
     def visit_IfExp(self, node):
         node = self.generic_visit(node)
 
+        # tuple(locals().values()) indicates to the graph compiler
+        # that all local variables are considered parameters.
         template = '''
                 ivy.if_else(
                         test,
-                        lambda: true_expr,
-                        lambda: false_expr,
-                        ())
+                        lambda *_: true_expr,
+                        lambda *_: false_expr,
+                        tuple(locals().values()))
         '''
-        return templates.replace_as_expression(
+        ret = templates.replace_as_expression(
                 template,
                 test=node.test,
                 true_expr=node.body,
                 false_expr=node.orelse)
+        return ret
 
 def transform(node, ctx):
     node = ConditionalExpressionTransformer(ctx).visit(node)
