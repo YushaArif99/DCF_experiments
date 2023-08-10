@@ -100,15 +100,15 @@ class PyToIvy(transpiler.PyToPy):
         # canonicalization creates.
         node = continue_statements.transform(node, ctx)
         node = return_statements.transform(node, ctx)
-        #node = lists.transform(node, ctx)
-        #node = slices.transform(node, ctx)
+        # node = lists.transform(node, ctx)
+        # node = slices.transform(node, ctx)
         node = call_trees.transform(node, ctx)
         node = control_flow.transform(node, ctx)
-        #node = conditional_expressions.transform(node, ctx)
-        #node = comparison.transform(node, ctx)
+        # node = conditional_expressions.transform(node, ctx)
+        # node = comparison.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
         node = boolean_operators.transform(node, ctx)
-        #node = assigns.transform(node, ctx)
+        # node = assigns.transform(node, ctx)
         return node
 
 
@@ -183,6 +183,18 @@ def is_unsupported(o):
     return False
 
 
+def is_user_defined(func):
+    # Check if the function is a built-in function
+    if inspect.isbuiltin(func):
+        return False
+    if hasattr(func, "__module__"):
+        # Check if the function is one of the specified functions
+        if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
+            return False
+    # If none of the above conditions are met, the function is user-defined
+    return True
+
+
 def converted_call(f, args, kwargs):
     """Converts a function call inline.
 
@@ -225,7 +237,11 @@ def converted_call(f, args, kwargs):
         )
 
     # If the function is wrapped, we don't need to go inside of it.
-    if hasattr(f, "wrapped_for_compiling") or hasattr(f, "wrapped_for_tracing"):
+    if (
+        is_user_defined(f)
+        or hasattr(f, "wrapped_for_compiling")
+        or hasattr(f, "wrapped_for_tracing")
+    ):
         if kwargs:
             return f(*args, **kwargs)
         else:
@@ -291,14 +307,21 @@ def to_functional_form(entity, program_ctx=None):
     """Applies autograph_ivy to entity."""
 
     if isinstance(entity, (BuiltinFunctionType, BuiltinMethodType)):
-        return entity #??
-    
-    functionlike = (FunctionType, MethodType,)
-    if hasattr(entity, "__call__") and callable(entity) and not isinstance(entity, functionlike):
+        return entity
+
+    functionlike = (
+        FunctionType,
+        MethodType,
+    )
+    if (
+        hasattr(entity, "__call__")
+        and callable(entity)
+        and not isinstance(entity, functionlike)
+    ):
         if entity.__call__ is not entity:
             new_call = to_functional_form(entity.__call__)
-            entity.__call__ = new_call # doesn't work for some reason
-            return new_call
+            entity.__call__ = new_call  # doesn't work for some reason
+            return entity
 
     # TODO(mdan): Put these extra fields inside __autograph_ivy_info__.
     if not hasattr(entity, "__code__"):

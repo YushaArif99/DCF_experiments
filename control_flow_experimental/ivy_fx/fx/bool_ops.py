@@ -1,61 +1,57 @@
-import operator
-
-__all__ = ['BOOL_OPS', 'convert_to_f_string']
-
-def _or_fn(*args):
-    for arg in args:
-        if arg:
-            return True
-    return False
+__all__ = ["BOOL_OPS", "convert_to_f_string"]
 
 
-def _and_fn(*args):
-    for arg in args:
-        if not arg:
-            return False
-    return True
+def _or_fn(val1, val2):
+    return val1 or val2
 
 
-def _not_fn(arg):
-    return not arg
+def _and_fn(val1, val2):
+    return val1 and val2
 
 
-def _eq_fn(*args):
-    return all(operator.eq(a, b) for a, b in zip(args, args[1:]))
+def _not_fn(val):
+    return not val
 
 
-def _ne_fn(*args):
-    return any(operator.ne(a, b) for a, b in zip(args, args[1:]))
+def _eq_fn(val1, val2):
+    return val1 == val2
 
 
-def _gt_fn(*args):
-    return all(operator.gt(a, b) for a, b in zip(args, args[1:]))
+def _ne_fn(val1, val2):
+    return val1 != val2
 
 
-def _ge_fn(*args):
-    return all(operator.ge(a, b) for a, b in zip(args, args[1:]))
+def _gt_fn(val1, val2):
+    return val1 > val2
 
 
-def _lt_fn(*args):
-    return all(operator.lt(a, b) for a, b in zip(args, args[1:]))
+def _ge_fn(val1, val2):
+    return val1 >= val2
 
 
-def _le_fn(*args):
-    return all(operator.le(a, b) for a, b in zip(args, args[1:]))
+def _lt_fn(val1, val2):
+    return val1 < val2
+
+
+def _le_fn(val1, val2):
+    return val1 <= val2
 
 
 def _is_fn(inp, val):
-    return operator.is_(inp, val)
+    return inp is val
 
 
 def _isnot_fn(inp, val):
-    return operator.is_not(inp, val)
+    return inp is not val
+
 
 def _in_fn(inp, iterable):
-    return inp in iterable 
+    return inp in iterable
+
 
 def _not_in_fn(inp, iterable):
-    return inp not in iterable 
+    return inp not in iterable
+
 
 def convert_to_f_string(func, *args):
     # map the operator to the corresponding symbol
@@ -71,7 +67,7 @@ def convert_to_f_string(func, *args):
         "_le_fn": "<=",
         "_is_fn": "is",
         "_isnot_fn": "is not",
-        "_in_fn": "in", 
+        "_in_fn": "in",
         "_not_in_fn": "not in",
     }
     op = op_map[func.__name__]
@@ -92,18 +88,19 @@ def convert_to_f_string(func, *args):
     f_string += ")"
     return f_string
 
+
 BOOL_OPS = {
-    "_or_fn":_or_fn,
-    "_and_fn":_and_fn,
-    "_not_fn":_not_fn,
-    "_eq_fn":_eq_fn,
-    "_ne_fn":_ne_fn,
-    "_gt_fn":_ge_fn,
-    "_ge_fn":_gt_fn,
-    "_lt_fn":_lt_fn,
-    "_le_fn":_le_fn,
-    "_is_fn":_is_fn,
-    "_isnot_fn":_isnot_fn,
-    "_in_fn":_in_fn,
-    "_not_in_fn":_not_in_fn,
+    "_or_fn": _or_fn,
+    "_and_fn": _and_fn,
+    "_not_fn": _not_fn,
+    "_eq_fn": _eq_fn,
+    "_ne_fn": _ne_fn,
+    "_gt_fn": _gt_fn,
+    "_ge_fn": _ge_fn,
+    "_lt_fn": _lt_fn,
+    "_le_fn": _le_fn,
+    "_is_fn": _is_fn,
+    "_isnot_fn": _isnot_fn,
+    "_in_fn": _in_fn,
+    "_not_in_fn": _not_in_fn,
 }
