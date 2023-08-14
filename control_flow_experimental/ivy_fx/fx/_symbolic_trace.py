@@ -35,6 +35,7 @@ from .bool_ops import BOOL_OPS
 
 import graph_compiler.globals as glob
 from graph_compiler.wrapping import FUNC_TO_PATH
+from graph_compiler.graph import Graph as IvyGraph
 import numpy as np
 import ivy
 
@@ -920,7 +921,7 @@ class Tracer(TracerBase):
     # This method will be refactored
     @compatibility(is_backward_compatible=False)
     def create_args_for_root(
-        self, root_fn, is_module, constant_args=None, concrete_inputs=None
+        self, root_fn, is_module, constant_args=None, *concr_args, **concr_kwargs,
     ):
         """
         Create ``placeholder`` nodes corresponding to the signature of the ``root``
@@ -1009,15 +1010,15 @@ class Tracer(TracerBase):
                 proxy_data = concr_arg
             else:
                 proxy_data = None
-            if name[0] == "*":
-                default = ()
-            else:
-                param = sig.parameters[name]
-                default = () if param.default is inspect.Parameter.empty else (param.default,)  # type: ignore[assignment]
+            # if name[0] == "*":
+            #     default = ()
+            # else:
+            #     param = sig.parameters[name]
+            #     default = () if param.default is inspect.Parameter.empty else (param.default,)  # type: ignore[assignment]
             return self.create_proxy(
                 "placeholder",
                 name,
-                default,
+                (),
                 {},
                 type_expr=fn_for_analysis.__annotations__.get(name, None),
                 data=proxy_data,
@@ -1030,15 +1031,48 @@ class Tracer(TracerBase):
                     f"Tracing expected {len(arg_names)} arguments but got {len(constant_args)} concrete arguments"
                 )
             constant_args = dict(zip(arg_names, constant_args))
+        concrete_inputs = {}
+        concr_args_iter = iter(concr_args)
+        for name in arg_names:
+            if name in concr_kwargs:
+                concrete_inputs[name] = concr_kwargs[name]
+            else:
+                try:
+                    concrete_inputs[name] = next(concr_args_iter)
+                except StopIteration:
+                    pass
+    
         args.extend(proxy_placeholder(names) for names in arg_names)
 
         if co.co_kwonlyargcount > 0 or co.co_flags & HAS_VARSTUFF:
-            # TODO: type annotations for *args and **kwargs
+            varargs_proxies = []
+            kwargs_proxies = {}
+            # Create a new concrete_inputs dictionary that maps the generated names
+            # for the concr_args and concr_kwargs values to their corresponding values
+            concrete_inputs = {}
+            for i, value in enumerate(concr_args):
+                name = f'args{i}'
+                concrete_inputs[name] = value
+            for name, value in concr_kwargs.items():
+                concrete_inputs[name] = value
+
             if co.co_flags & inspect.CO_VARARGS:
-                args.append(proxy_placeholder("*" + next(names_iter)))
+                varargs_proxies.extend(proxy_placeholder(f'args{i}') for i, _ in enumerate(concr_args))
+
             if co.co_flags & inspect.CO_VARKEYWORDS:
-                args.append(proxy_placeholder("**" + next(names_iter)))
-            root_fn = _patch_function(root_fn, len(args))
+                kwargs_proxies.update({k: root_fn.constants[k] if k in root_fn.constants else proxy_placeholder(k) for k, v in concr_kwargs.items()})
+
+            #root_fn = _patch_function(root_fn, len(args) + len(varargs_proxies) + len(kwargs_proxies))
+
+            # Create a wrapper function that takes a single list of arguments and unpacks it
+            # into separate arguments for the variable-length and keyword arguments
+            def var_arg_n_kwargs_fn(*all_args):
+                varargs = all_args[:len(varargs_proxies) + len(args)]
+                kwargs = {k: v for k, v in zip(kwargs_proxies.keys(), all_args[len(varargs_proxies):])}
+                return root_fn(*varargs, **kwargs)
+
+            return var_arg_n_kwargs_fn, args + varargs_proxies + list(kwargs_proxies.values())
+
 
         flat_args, in_spec = pytree.tree_flatten(tuple(args))
         if any(not isinstance(i, pytree.LeafSpec) for i in in_spec.children_specs):
@@ -1069,7 +1103,8 @@ class Tracer(TracerBase):
         self,
         root: Union[torch.nn.Module, Callable[..., Any]],
         constant_args: Optional[Dict[str, Any]] = None,
-        concrete_inputs: Optional[Dict[str, Any]] = None,
+        args=[],
+        **kwargs,
     ) -> Graph:
         """
         Trace ``root`` and return the corresponding FX ``Graph`` representation. ``root``
@@ -1134,7 +1169,7 @@ class Tracer(TracerBase):
 
             fn_globals = fn.__globals__  # run before it gets patched
             fn, args = self.create_args_for_root(
-                fn, isinstance(root, ivy.Module), constant_args, concrete_inputs
+                fn, isinstance(root, ivy.Module), constant_args, *args, **kwargs,
             )
 
             parameter_proxy_cache: Dict[
@@ -1259,18 +1294,17 @@ def _dummy_tracing_func(orig_fn):
             ret = None
             subgs = []
             cond_vars = args[3]
-            concr_args, concr_inputs, proxy_inputs = {}, {}, []
+            const_args, concr_args, proxy_inputs = {}, {}, []
             for k, v in cond_vars.items():
                 if isinstance(v, Proxy):
                     proxy_inputs.append(v)
-                    concr_inputs[k] = v.data
+                    concr_args[k] = v.data
                 else:
-                    concr_args[k] = v
+                    const_args[k] = v
 
             t = Tracer(name="pred_fn")
             pred_g = t.trace(
-                args[0], constant_args=concr_args, concrete_inputs=concr_inputs
-            )
+                args[0], constant_args=const_args,args=[], **concr_args)
             pred = t.orig_ret
             try:
                 pred = pred[0] if isinstance(pred, (list, tuple)) else pred
@@ -1286,7 +1320,7 @@ def _dummy_tracing_func(orig_fn):
                     if inspect.isfunction(arg):
                         t = Tracer(name=f"{arg.__name__}")
                         graph = t.trace(
-                            arg, constant_args=concr_args, concrete_inputs=concr_inputs
+                            arg, constant_args=const_args, args=[], **concr_args,
                         )
                         subgs.append(graph)
 
@@ -1318,17 +1352,17 @@ def _dummy_tracing_func(orig_fn):
             ret = None
             subgs = []
             test_fn, body_fn, loop_vars = args
-            concr_args, concr_inputs, proxy_inputs = {}, {}, []
+            const_args, concr_args, proxy_inputs = {}, {}, []
             for k, v in loop_vars.items():
                 if isinstance(v, Proxy):
                     proxy_inputs.append(v)
-                    concr_inputs[k] = v.data
+                    concr_args[k] = v.data
                 else:
-                    concr_args[k] = v
+                    const_args[k] = v
 
             t = Tracer(name="test_fn")
             test_g = t.trace(
-                test_fn, constant_args=concr_args, concrete_inputs=concr_inputs
+                test_fn, constant_args=const_args, args=[], **concr_args
             )
             test = t.orig_ret
             try:
@@ -1343,7 +1377,7 @@ def _dummy_tracing_func(orig_fn):
                 subgs = [test_g]
                 t = Tracer(name="body_fn")
                 graph = t.trace(
-                    body_fn, constant_args=concr_args, concrete_inputs=concr_inputs
+                    body_fn, constant_args=const_args, args=[], **concr_args
                 )
                 subgs.append(graph)
 
@@ -1622,11 +1656,12 @@ def wrap(fn_or_name: Union[str, Callable], dynamic: bool = False):
 @compatibility(is_backward_compatible=True)
 def symbolic_trace(
     root: Union[ivy.Module, Callable[..., Any]],
+    args,
     constant_args: Optional[Dict[str, Any]] = None,
-    concrete_inputs: Optional[Dict[str, Any]] = None,
     frontend: Optional[str] = None,
     to_ivy: bool = False,
     with_numpy: bool = False,
+    **kwargs,
 ) -> Graph:
     """
     Symbolic tracing API
@@ -1709,7 +1744,11 @@ def symbolic_trace(
 
         try:
             tracer = Tracer()
-            tracer_graph = tracer.trace(root, constant_args, concrete_inputs)
+            if isinstance(root, IvyGraph):
+                root._scripted_call.constants = root.constants
+                tracer_graph = tracer.trace(root._scripted_call, constant_args, args=args, **kwargs, **root.constants)
+            else:
+                tracer_graph = tracer.trace(root, constant_args, args=args, **kwargs)
         except SymTraceError:
             raise ivy.utils.exceptions.IvyException(
                 message="Error while symbolically tracing the function."
