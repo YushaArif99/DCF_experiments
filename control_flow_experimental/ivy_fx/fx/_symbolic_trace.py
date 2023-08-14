@@ -1436,6 +1436,10 @@ class _PatchedFnSetAttr(_PatchedFn):
     def revert(self):
         setattr(self.frame_dict, self.fn_name, self.orig_fn)
 
+class _PatchedFnSetUfuncAttr(_PatchedFn):
+    def revert(self):
+        self.frame_dict[self.fn_name].func = self.orig_fn
+
 
 class _Patcher:
     def __init__(self):
@@ -1470,12 +1474,16 @@ class _Patcher:
         """
         Replace object_or_dict.name with new_fn until we exit the context manager.
         """
-        new_fn.__fx_already_patched = deduplicate  # type: ignore[attr-defined]
+        #new_fn.__fx_already_patched = deduplicate  # type: ignore[attr-defined]
         orig_fn = getattr(cls, name)
-        if getattr(orig_fn, "__fx_already_patched", False):
-            return  # already patched, no need to do it again
-        self.patches_made.append(_PatchedFnSetAttr(cls, name, orig_fn))
-        setattr(cls, name, new_fn)
+        # if getattr(orig_fn, "__fx_already_patched", False):
+        #     return  # already patched, no need to do it again
+        if orig_fn.__class__.__name__ =="ufunc":
+            self.patches_made.append(_PatchedFnSetUfuncAttr(cls, name, orig_fn))
+            cls[name].func = new_fn
+        else:
+            self.patches_made.append(_PatchedFnSetAttr(cls, name, orig_fn))
+            setattr(cls, name, new_fn)
 
     def visit_once(self, thing: Any):
         """Return True on the first call to with thing, otherwise false"""
@@ -1497,17 +1505,21 @@ class _Patcher:
             self.patches_made.pop().revert()
         self.visited.clear()
 
-def _patch_modules(patcher: _Patcher, module: Dict[str, Any], wrap_fn: Callable):
+def _patch_modules(patcher: _Patcher, modules: List[Dict[str, Any]], wrap_fn: Callable, wrap_all_fns=False, framework=None):
     """
-    Go through the ``module`` and, for each object, wrap
+    Iterate through the ``modules`` list and, for each object, wrap
     the listed functions using the `wrap_fn` wrapper.
     """
-    for name in dir(module):
-        orig_func = getattr(module, name)
-        if not _should_be_wrapped(orig_func):
-            continue
-        else:
-            patcher.patch(module, name, wrap_fn(orig_func))
+    for module in modules:
+        for name in dir(module):
+            orig_func = getattr(module, name)
+            if not wrap_all_fns and orig_func in glob.FUNCTIONS_ATTRS_NOT_TO_WRAP[framework] or not _should_be_wrapped(orig_func) :
+                continue
+            else:
+                if orig_func.__class__.__name__ == "ufunc":
+                    patcher.patch_method(module, name, wrap_fn(orig_func.func))
+                else:
+                    patcher.patch_method(module, name, wrap_fn(orig_func))
                              
 def _patch_wrapped_functions(patcher: _Patcher):
     """
@@ -1668,60 +1680,8 @@ def symbolic_trace(
     Returns:
         Graph: an fx graph created from the recorded operations from ``root``.
     """
-
-    def _remove_decorators(orig_fn):
-        if hasattr(orig_fn, '_decorated_fn'):
-            return orig_fn
-        elif orig_fn.__class__.__name__ == "ufunc":
-            orig_fn._decorated_fn = orig_fn.func
-            orig_fn.func = inspect.unwrap(orig_fn.func)
-            return orig_fn
-        else:
-            new_fn = inspect.unwrap(orig_fn)
-            new_fn._decorated_fn = orig_fn
-
-        return new_fn
-
-    def _restore_decorators(new_fn):
-        if hasattr(new_fn, "_decorated_fn"):
-            if new_fn.__class__.__name__ == "ufunc":
-                new_fn.func = new_fn._decorated_fn
-                delattr(new_fn, "_decorated_fn")
-                return new_fn
-            orig_fn = new_fn._decorated_fn
-            delattr(new_fn, "_decorated_fn")
-            return orig_fn
-        return orig_fn
-
-    _wrap_fn = lambda fn: _remove_decorators(fn)
-    _unwrap_fn = lambda fn: _restore_decorators(fn)
-    _wrap_fn.__name__ = "remove_decorators"
-    _unwrap_fn.__name__ = "restore_decorators"
-
-    # remove all decorators from ivy functions
-    _wrap_functions_for_dummy_tracing(
-        to_ivy=True, _wrap_fn=_wrap_fn, frontend=None, path="ivy"
-    )
-
-    # remove all decorators from frontend functions
-    if frontend:
-        _wrap_functions_for_dummy_tracing(
-            to_ivy=False,
-            with_numpy=with_numpy,
-            frontend=frontend,
-            _wrap_fn=_wrap_fn,
-            path="frontend",
-        )
     
-    # remove all decorators from backend functions
-    if not to_ivy:
-        _wrap_functions_for_dummy_tracing(
-            to_ivy=False,
-            with_numpy=with_numpy,
-            _wrap_fn=_wrap_fn,
-            path="backend",
-        )
-
+    """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
     # wrap the native backend functions
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
@@ -1730,11 +1690,22 @@ def symbolic_trace(
         path=None,
     )
 
-    # explicitly wrap ivy control flow ops since we wont trace into tf.cond/jax.lax.cond etc.
     with _Patcher() as patcher:
-        ivy_module = importlib.import_module('ivy')
+        framework = ivy.current_backend_str()
+        ivy_modules = _load_modules_from(glob.MODULES_TO_WRAP['ivy'],add_path=None)
+        backend_modules = _load_modules_from(glob.MODULES_TO_WRAP[framework],add_path='backend')
+        frontend_modules = None if not frontend else _load_modules_from(glob.MODULES_TO_WRAP[frontend],add_path='frontend')
+        # remove decorators from ivy functions
+        _patch_modules(patcher, ivy_modules, lambda fn: inspect.unwrap(fn), wrap_all_fns=True)
+        # remove decorators from ivy backend functions
+        _patch_modules(patcher, backend_modules, lambda fn: inspect.unwrap(fn), wrap_all_fns=True)
+        if frontend is not None:
+            # remove decorators from ivy frontend functions
+            _patch_modules(patcher, frontend_modules, lambda fn: inspect.unwrap(fn), wrap_all_fns=True)
+
+        # explicitly wrap ivy control flow ops since we wont trace into tf.cond/jax.lax.cond etc.
         for f in [ivy.if_else, ivy.if_exp, ivy.for_loop, ivy.while_loop]:
-            patcher.patch_method(ivy_module, f.__name__, _dummy_tracing_func(f))
+            patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f))
 
         try:
             tracer = Tracer()
@@ -1751,22 +1722,6 @@ def symbolic_trace(
         _unwrap_fn=lambda fn: _unwrap_function_from_dummy_tracing(fn),
         path=None,
     )
-
-    # restore decorators on ivy functions
-    _unwrap_functions_from_dummy_tracing(
-        to_ivy=True, _unwrap_fn=_unwrap_fn, frontend=None, path="ivy"
-    )
-
-    # restore decorators on backend functions
-    if not to_ivy:
-        _unwrap_functions_from_dummy_tracing(
-            to_ivy=False, with_numpy=with_numpy, _unwrap_fn=_unwrap_fn, path="backend"
-        )
-    # restore decorators on frontend functions
-    if frontend:
-        _unwrap_functions_from_dummy_tracing(
-            to_ivy=False, frontend=frontend, _unwrap_fn=_unwrap_fn, path="frontend"
-        )
 
     return tracer_graph
 
