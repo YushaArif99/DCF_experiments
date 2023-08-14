@@ -300,6 +300,29 @@ def _create_ivy_fn(node, to_ivy=False):
             )
             if_else_node.subgraphs = subgraphs
             if_else_node.pred = node.meta["pred"]
+        elif hasattr(node.target, "__name__") and node.target.__name__ == "while_loop":
+            subgraphs = []
+            if isinstance(node.meta["test"], (bool, type(None))):
+                test_g = lambda: bool(node.meta["test"])
+                subgraphs.append(test_g)
+            for subg in node.meta["subgraphs"]:
+                if callable(subg):
+                    subgraphs.append(subg)
+                else:
+                    subgraphs.append(tracer_to_ivy_graph(subg))
+            node.args = ivy.nested_map(
+                node.args, lambda x: x.c if isinstance(x, Constant) else x
+            )
+            while_loop_node = log_ivy_fn(
+                graph,
+                fn=node.target,
+                ret=node,
+                args=list(node.args[2].values()),
+                kwargs={},
+                to_ivy=to_ivy,
+            )
+            while_loop_node.subgraphs = subgraphs
+            while_loop_node.test = node.meta["test"]
         else:
             node.args = ivy.nested_map(
                 node.args, lambda x: x.c if isinstance(x, Constant) else x
