@@ -9,7 +9,7 @@ import functools
 from dataclasses import is_dataclass, fields
 
 
-from .graph import magic_methods, reflectable_magic_methods, Graph
+from .graph import magic_methods, reflectable_magic_methods, inplace_methods, Graph
 from typing import Tuple, Dict, OrderedDict, Optional, Iterable, Any, Iterator, Callable, Union
 from .node import Target, Node, Argument, base_types, map_aggregate
 from ._compatibility import compatibility
@@ -495,3 +495,16 @@ def _define_reflectable(orig_method_name):
 
 for orig_method_name in reflectable_magic_methods:
     _define_reflectable(orig_method_name)
+
+def _define_inplace(orig_method_name):
+    method_name = f'__{orig_method_name}__'
+
+    def impl(self, rhs):
+        target = getattr(operator, orig_method_name)
+        return self.tracer.create_proxy('call_function', target, (self, rhs), {}, data=self.data)
+    impl.__name__ = method_name
+    impl.__qualname__ = method_name
+    setattr(Proxy, method_name, impl)
+
+for orig_method_name in inplace_methods:
+    _define_inplace(orig_method_name)
