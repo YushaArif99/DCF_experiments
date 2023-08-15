@@ -273,7 +273,7 @@ class ControlFlowTransformer(converter.Base):
         lambda_args = [elt for elt in tuple_vars.elts]
 
         template = """
-                ivy.if_exp(
+                ivy.if_else(
                         lambda lambda_args: test,
                         lambda lambda_args: true_expr,
                         lambda lambda_args: false_expr,
