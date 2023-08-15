@@ -31,37 +31,14 @@ from ._compatibility import compatibility
 from .graph import _PyTreeCodeGen, _PyTreeInfo, Graph
 from .node import Argument, base_types, map_aggregate
 from .proxy import Proxy, TracerBase, Scope, ScopeContextManager
-from .bool_ops import BOOL_OPS
 
 import graph_compiler.globals as glob
 from graph_compiler.wrapping import FUNC_TO_PATH
 from graph_compiler.graph import Graph as IvyGraph
 import numpy as np
 import ivy
+import control_flow_experimental as cfe
 
-
-__all__ = [
-    "symbolic_trace",
-    "Tracer",
-    "wrap",
-    "PH",
-    "ProxyableClassMeta",
-    "iter_proxy",
-    "dict_proxy",
-    "bool_or",
-    "bool_and",
-    "unary_not",
-    "cmp_eq",
-    "cmp_ne",
-    "cmp_gt",
-    "cmp_ge",
-    "cmp_lt",
-    "cmp_le",
-    "cmp_is",
-    "cmp_isnot",
-    "cmp_in",
-    "cmp_notin",
-]
 
 HAS_VARSTUFF = inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
 
@@ -1409,7 +1386,7 @@ def _dummy_tracing_func(orig_fn):
                 return tuple(results)
 
             all_callable_args = [inspect.isfunction(a) for a in args]
-            if orig_fn.__name__ in BOOL_OPS and all(all_callable_args):
+            if orig_fn.__name__ in cfe.transform_funcs and all(all_callable_args):
                 args = eval_args(*args)
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
@@ -1742,6 +1719,9 @@ def symbolic_trace(
         for f in [ivy.if_else, ivy.if_exp, ivy.for_loop, ivy.while_loop]:
             patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f))
 
+        # explicitly wrap all ast transform functions 
+        for name,f in cfe.transform_funcs.items():
+            patcher.patch_method(cfe, name, _dummy_tracing_func(f))
         try:
             tracer = Tracer()
             if isinstance(root, IvyGraph):
@@ -1786,19 +1766,3 @@ def dict_proxy(iterable):
         iterable.node.dict_proxy = True
         return {iterable.__name__: iterable}
 
-
-"""TODO (yusha): maybe using a for loop here would be better?"""
-# wrap all boolean op funcs
-bool_or = _dummy_tracing_func(BOOL_OPS["_or_fn"])
-bool_and = _dummy_tracing_func(BOOL_OPS["_and_fn"])
-unary_not = _dummy_tracing_func(BOOL_OPS["_not_fn"])
-cmp_eq = _dummy_tracing_func(BOOL_OPS["_eq_fn"])
-cmp_ne = _dummy_tracing_func(BOOL_OPS["_ne_fn"])
-cmp_gt = _dummy_tracing_func(BOOL_OPS["_gt_fn"])
-cmp_ge = _dummy_tracing_func(BOOL_OPS["_ge_fn"])
-cmp_lt = _dummy_tracing_func(BOOL_OPS["_lt_fn"])
-cmp_le = _dummy_tracing_func(BOOL_OPS["_le_fn"])
-cmp_is = _dummy_tracing_func(BOOL_OPS["_is_fn"])
-cmp_isnot = _dummy_tracing_func(BOOL_OPS["_isnot_fn"])
-cmp_in = _dummy_tracing_func(BOOL_OPS["_in_fn"])
-cmp_notin = _dummy_tracing_func(BOOL_OPS["_not_in_fn"])

@@ -35,6 +35,7 @@ from control_flow_experimental.autograph_ivy.converters import comparison
 from control_flow_experimental.autograph_ivy.converters import lists
 from control_flow_experimental.autograph_ivy.converters import slices
 import control_flow_experimental.autograph_ivy.core.list_ops as list_ops
+import control_flow_experimental.autograph_ivy.core.ast_transforms as ast_transforms
 from control_flow_experimental.autograph_ivy.core import unsupported_features_checker
 from control_flow_experimental.autograph_ivy.pyct import anno
 from control_flow_experimental.autograph_ivy.pyct import cfg
@@ -45,6 +46,7 @@ from control_flow_experimental.autograph_ivy.pyct.static_analysis import activit
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import (
     reaching_definitions,
 )
+import control_flow_experimental as cfe
 import control_flow_experimental.ivy_fx.fx as fx
 from control_flow_experimental.ivy_fx.fx.proxy import Proxy
 import graph_compiler.globals as glob
@@ -71,9 +73,10 @@ class PyToIvy(transpiler.PyToPy):
             module_spec = importlib.machinery.ModuleSpec("autograph_ivy", None)
             ag_internal = importlib.util.module_from_spec(module_spec)
             ag_internal.__dict__.update(inspect.getmodule(PyToIvy).__dict__)
-            ag_internal.__dict__.update(list_ops.__dict__)
+            ag_internal.__dict__.update(list_ops.__dict__) 
+            ag_internal.__dict__.update(ast_transforms.__dict__)
             # TODO(mdan): Add safeguards against name clashes.
-            self._extra_locals = {"ivy__": ag_internal, "ivy": ivy, "fx": fx}
+            self._extra_locals = {"ivy__": ag_internal, "ivy": ivy, "fx": fx, 'cfe':cfe}
         return self._extra_locals
 
     def initial_analysis(self, node, ctx):

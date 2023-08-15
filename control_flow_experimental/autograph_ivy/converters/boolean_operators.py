@@ -6,7 +6,7 @@ Example:
 
 becomes
 
-    fx.bool_or(lambda: fx.bool_or(lambda: x, lambda: y), lambda: z)
+    cfe.bool_or(lambda: cfe.bool_or(lambda: x, lambda: y), lambda: z)
 
 """
 
@@ -41,11 +41,11 @@ class BooleanTransformer(converter.Base):
         # and a values attribute (which is a list of expressions)
         if isinstance(node.op, gast.Or):
             template = """
-                fx.bool_or(args)
+                cfe.bool_or(args)
             """
         elif isinstance(node.op, gast.And):
             template = """
-                fx.bool_and(args)
+                cfe.bool_and(args)
             """
         else:
             raise NotImplementedError('unsupported boolean operator')
@@ -75,43 +75,43 @@ class BooleanTransformer(converter.Base):
         op = node.ops[0]
         if isinstance(op, gast.Eq):
             template = """
-                fx.cmp_eq(left, right)
+                cfe.cmp_eq(left, right)
             """
         elif isinstance(op, gast.NotEq):
             template = """
-                fx.cmp_ne(left, right)
+                cfe.cmp_ne(left, right)
             """
         elif isinstance(op, gast.Gt):
             template = """
-                fx.cmp_gt(left, right)
+                cfe.cmp_gt(left, right)
             """
         elif isinstance(op, gast.GtE):
             template = """
-                fx.cmp_ge(left, right)
+                cfe.cmp_ge(left, right)
             """
         elif isinstance(op, gast.Lt):
             template = """
-                fx.cmp_lt(left, right)
+                cfe.cmp_lt(left, right)
             """
         elif isinstance(op, gast.LtE):
             template = """
-                fx.cmp_le(left, right)
+                cfe.cmp_le(left, right)
             """
         elif isinstance(op, gast.Is):
             template = """
-                fx.cmp_is(left, right)
+                cfe.cmp_is(left, right)
             """
         elif isinstance(op, gast.IsNot):
             template = """
-                fx.cmp_isnot(left, right)
+                cfe.cmp_isnot(left, right)
             """
         elif isinstance(op, gast.In):
             template = """
-                fx.cmp_in(left, right)
+                cfe.cmp_in(left, right)
             """
         elif isinstance(op, gast.NotIn):
             template = """
-                fx.cmp_notin(left, right)
+                cfe.cmp_notin(left, right)
            """
         else:
             raise NotImplementedError('unsupported comparison operator')
@@ -124,43 +124,43 @@ class BooleanTransformer(converter.Base):
                 op = node.ops[i]
                 if isinstance(op, gast.Eq):
                     template = """
-                        fx.cmp_eq(result, arg)
+                        cfe.cmp_eq(result, arg)
                     """
                 elif isinstance(op, gast.NotEq):
                     template = """
-                        fx.cmp_ne(result, arg)
+                        cfe.cmp_ne(result, arg)
                     """
                 elif isinstance(op, gast.Gt):
                     template = """
-                        fx.cmp_gt(result, arg)
+                        cfe.cmp_gt(result, arg)
                     """
                 elif isinstance(op, gast.GtE):
                     template = """
-                        fx.cmp_ge(result, arg)
+                        cfe.cmp_ge(result, arg)
                     """
                 elif isinstance(op, gast.Lt):
                     template = """
-                        fx.cmp_lt(result, arg)
+                        cfe.cmp_lt(result, arg)
                     """
                 elif isinstance(op, gast.LtE):
                     template = """
-                        fx.cmp_le(result, arg)
+                        cfe.cmp_le(result, arg)
                     """
                 elif isinstance(op, gast.Is):
                     template = """
-                        fx.cmp_is(result, arg)
+                        cfe.cmp_is(result, arg)
                     """
                 elif isinstance(op, gast.IsNot):
                     template = """
-                        fx.cmp_isnot(result, arg)
+                        cfe.cmp_isnot(result, arg)
                     """
                 elif isinstance(op, gast.In):
                     template = """
-                        fx.cmp_in(result, arg)
+                        cfe.cmp_in(result, arg)
                     """
                 elif isinstance(op, gast.NotIn):
                     template = """
-                        fx.cmp_notin(result, arg)
+                        cfe.cmp_notin(result, arg)
                    """
                 else:
                     raise NotImplementedError('unsupported comparison operator')
@@ -174,7 +174,7 @@ class BooleanTransformer(converter.Base):
         # and an operand attribute (which is an expression)
         if isinstance(node.op, gast.Not):
             template = """
-                fx.unary_not(arg)
+                cfe.unary_not(arg)
             """
         else:
             # For other unary operators, just visit them normally
