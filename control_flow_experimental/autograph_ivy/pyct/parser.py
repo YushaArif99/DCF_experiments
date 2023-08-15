@@ -143,16 +143,19 @@ def parse_entity(entity, future_features):
     if inspect_utils.islambda(entity):
         return _parse_lambda(entity)
 
-    try:
-        original_source = inspect_utils.getimmediatesource(entity)
-    except OSError as e:
-        raise errors.InaccessibleSourceCodeError(
-                f'Unable to locate the source code of {entity}. Note that functions'
-                ' defined in certain environments, like the interactive Python shell,'
-                ' do not expose their source code. If that is the case, you should'
-                ' define them in a .py source file. If you are certain the code is'
-                ' graph-compatible, wrap the call using'
-                f' @tf.autograph.experimental.do_not_convert. Original error: {e}')
+    if hasattr(entity, "source_code"):
+        original_source = entity.source_code
+    else:
+        try:
+            original_source = inspect_utils.getimmediatesource(entity)
+        except OSError as e:
+            raise errors.InaccessibleSourceCodeError(
+                    f'Unable to locate the source code of {entity}. Note that functions'
+                    ' defined in certain environments, like the interactive Python shell,'
+                    ' do not expose their source code. If that is the case, you should'
+                    ' define them in a .py source file. If you are certain the code is'
+                    ' graph-compatible, wrap the call using'
+                    f' @tf.autograph.experimental.do_not_convert. Original error: {e}')
 
     source = dedent_block(original_source)
 

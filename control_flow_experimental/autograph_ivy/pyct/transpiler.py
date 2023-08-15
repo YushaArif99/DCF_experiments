@@ -157,34 +157,35 @@ class _PythonFnFactory(object):
         self.module = None
         self.source_map = None
 
-    def create(self,
-                         nodes,
-                         namer,
-                         inner_factory_name='inner_factory',
-                         outer_factory_name='outer_factory',
-                         future_features=()):
+    def create(
+        self,
+        nodes,
+        namer,
+        inner_factory_name='inner_factory',
+        outer_factory_name='outer_factory',
+        future_features=(),
+        return_filename=False,
+    ):
         """Initializes a function."""
         if self._unbound_factory is not None:
             raise ValueError('double initialization; create a new object instead')
 
         inner_factory_name = namer.new_symbol(inner_factory_name, ())
         outer_factory_name = namer.new_symbol(outer_factory_name, ())
-        nodes = _wrap_into_factory(nodes, self._name, inner_factory_name,
-                                                             outer_factory_name, self._freevars,
-                                                             self._extra_locals.keys(), future_features)
+        nodes = _wrap_into_factory(
+            nodes, self._name, inner_factory_name, outer_factory_name, self._freevars,
+            self._extra_locals.keys(), future_features
+        )
 
-        module, _, source_map = loader.load_ast(
-                nodes, include_source_map=True)
+        module, _, source_map, filename = loader.load_ast(nodes, include_source_map=True)
         outer_factory = getattr(module, outer_factory_name)
         self._unbound_factory = outer_factory()
         self.module = module
         self.source_map = source_map
+        if return_filename:
+            return filename
 
-    def instantiate(self,
-                                    globals_,
-                                    closure,
-                                    defaults=None,
-                                    kwdefaults=None):
+    def instantiate(self, globals_, closure, defaults=None, kwdefaults=None):
         """Creates a new function instance."""
         if self._unbound_factory is None:
             raise ValueError('call create first')
@@ -338,7 +339,8 @@ class GenericTranspiler(object):
         future_features = inspect_utils.getfutureimports(fn)
         node, source = parser.parse_entity(fn, future_features=future_features)
 
-        origin_info.resolve_entity(node, source, fn)
+        if not hasattr(fn, "source_code"):
+            origin_info.resolve_entity(node, source, fn)
 
         namespace = inspect_utils.getnamespace(fn)
         namer = naming.Namer(namespace)
