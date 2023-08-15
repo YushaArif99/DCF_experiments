@@ -41,11 +41,11 @@ class BooleanTransformer(converter.Base):
         # and a values attribute (which is a list of expressions)
         if isinstance(node.op, gast.Or):
             template = """
-                cfe.bool_or(args)
+                cfe.bool_or(left, right)
             """
         elif isinstance(node.op, gast.And):
             template = """
-                cfe.bool_and(args)
+                cfe.bool_and(left, right)
             """
         else:
             raise NotImplementedError('unsupported boolean operator')
@@ -54,9 +54,16 @@ class BooleanTransformer(converter.Base):
         values = [self.visit(v) for v in node.values]
 
         # Convert all the values to lambdas to enable short-circuit evaluation
-        values = [create_lambda_node(v) for v in values]
+        #values = [create_lambda_node(v) for v in values]
 
-        return templates.replace_as_expression(template, args=values)
+        # Use a template that matches the operator and pass the first two values as arguments
+        result = templates.replace_as_expression(template, left=values[0], right=values[1])
+
+        # Chain the remaining values using the same template
+        for i in range(2, len(values)):
+            result = templates.replace_as_expression(template, left=result, right=values[i])
+
+        return result
 
     def visit_Compare(self, node):
         # A Compare node has a left attribute (which is an expression)
@@ -68,8 +75,8 @@ class BooleanTransformer(converter.Base):
         comparators = [self.visit(c) for c in node.comparators]
 
         # Convert all the left and comparators to lambdas to enable lazy evaluation
-        left = create_lambda_node(left)
-        comparators = [create_lambda_node(c) for c in comparators]
+        #left = create_lambda_node(left)
+        #comparators = [create_lambda_node(c) for c in comparators]
 
         # Use a template that matches the first operator and pass the left and the first comparator as arguments
         op = node.ops[0]
@@ -184,7 +191,7 @@ class BooleanTransformer(converter.Base):
         operand = self.visit(node.operand)
 
         # Convert the operand to a lambda to enable lazy evaluation
-        operand = create_lambda_node(operand)
+        #operand = create_lambda_node(operand)
 
         return templates.replace_as_expression(template, arg=operand)
 
