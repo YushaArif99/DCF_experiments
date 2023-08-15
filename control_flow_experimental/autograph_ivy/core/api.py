@@ -30,6 +30,7 @@ from control_flow_experimental.autograph_ivy.converters import functions
 from control_flow_experimental.autograph_ivy.converters import return_statements
 from control_flow_experimental.autograph_ivy.converters import list_comprehensions
 from control_flow_experimental.autograph_ivy.converters import boolean_operators
+from control_flow_experimental.autograph_ivy.converters import builtins_type_casts
 from control_flow_experimental.autograph_ivy.converters import assigns
 from control_flow_experimental.autograph_ivy.converters import comparison
 from control_flow_experimental.autograph_ivy.converters import lists
@@ -111,6 +112,7 @@ class PyToIvy(transpiler.PyToPy):
         # node = comparison.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
         node = boolean_operators.transform(node, ctx)
+        node = builtins_type_casts.transform(node, ctx)
         # node = assigns.transform(node, ctx)
         return node
 
