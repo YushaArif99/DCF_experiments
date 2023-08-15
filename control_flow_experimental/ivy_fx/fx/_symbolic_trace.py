@@ -19,6 +19,7 @@ from typing import (
     Tuple,
     Type,
     Union,
+    Iterable
 )
 
 """TODO (yusha): remove all torch dependencies"""
@@ -31,6 +32,7 @@ from ._compatibility import compatibility
 from .graph import _PyTreeCodeGen, _PyTreeInfo, Graph
 from .node import Argument, base_types, map_aggregate
 from .proxy import Proxy, TracerBase, Scope, ScopeContextManager
+from .graph_converter import tracer_to_ivy_graph
 
 import graph_compiler.globals as glob
 from graph_compiler.wrapping import FUNC_TO_PATH
@@ -45,8 +47,12 @@ HAS_VARSTUFF = inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
 class SymTraceError(Exception):
     pass
 
-class GraphConnectError(Exception):
+class GraphConvertError(Exception):
     pass
+
+class ASTTransformationError(Exception):
+    pass
+
 # These need to run in global scope to handle nested calls correctly
 # _orig_module_call: Callable = torch.nn.Module.__call__
 # _orig_module_getattr: Callable = torch.nn.Module.__getattr__
@@ -1633,11 +1639,12 @@ def wrap(fn_or_name: Union[str, Callable], dynamic: bool = False):
 @compatibility(is_backward_compatible=True)
 def symbolic_trace(
     root: Union[ivy.Module, Callable[..., Any]],
-    args,
+    args: Iterable[Union[ivy.Array, ivy.NativeArray]],
     constant_args: Optional[Dict[str, Any]] = None,
     frontend: Optional[str] = None,
     to_ivy: bool = False,
     with_numpy: bool = False,
+    generate_source: bool = False,
     **kwargs,
 ) -> Graph:
     """
@@ -1683,12 +1690,14 @@ def symbolic_trace(
         - root (Union[torch.nn.Module, Callable]): Module or function to be traced and converted
             into a Graph representation.
         - constant_args (Optional[Dict[str, any]]): Constant inputs to be partially specialized
-        - concrete_inputs (Optional[Dict[str, any]]) : Real-value inputs to initialize the proxies with.
+        - args Iterable[Union[ivy.Array, ivy.NativeArray]]: inputs to initialize the proxies with.
+        - kwargs (Optional[Dict[str, any]]) : keyword inputs to initialize the proxies with.
         ``(Note):`` There is no real computation performed, the inputs are merely used to create specialized
-        ``IvyProxies`` that are more stable when working with ivy functions.
-        - frontend (Optional[str, None]): The frontend framework to wrap and consequently trace
-        - to_ivy (bool): Whether to trace into ivy functions or treat them as leaf nodes
-        - to_numpy (bool): Whether to track numpy function calls
+        ``IvyProxies`` that are more stable when working with frontends/ivy functions.
+        - frontend (Optional[str, None]): The frontend framework to wrap. Default is None
+        - to_ivy (bool): Whether to trace into ivy functions or treat them as leaf nodes. Default is False.
+        - to_numpy (bool): Whether to track numpy function calls. Default is False.
+        - generate_source (bool): Whether to reload the sourcecode of the Ivy Graph. Default is False.
     Returns:
         Graph: an fx graph created from the recorded operations from ``root``.
     """
@@ -1722,6 +1731,17 @@ def symbolic_trace(
         # explicitly wrap all ast transform functions 
         for name,f in cfe.transform_funcs.items():
             patcher.patch_method(cfe, name, _dummy_tracing_func(f))
+        
+        # first transform the root function
+        try:
+            if isinstance(root, IvyGraph):
+                root._scripted_call = cfe.to_functional_form(root._scripted_call)
+            else:
+                root = cfe.to_functional_form(root)
+        except ASTTransformationError:
+            raise ivy.utils.exceptions.IvyException(
+                message="Error while AST transforming the function."
+            )    
         try:
             tracer = Tracer()
             if isinstance(root, IvyGraph):
@@ -1733,6 +1753,17 @@ def symbolic_trace(
             raise ivy.utils.exceptions.IvyException(
                 message="Error while symbolically tracing the function."
             )
+        # convert the tracer graph into an ivy graph
+        try:
+            ivy_graph = tracer_to_ivy_graph(tracer_graph,root, to_ivy=to_ivy, with_numpy=with_numpy)
+        except GraphConvertError:
+            raise ivy.utils.exceptions.IvyException(
+                message="Error while converting the tracer graph to an ivy graph."
+            )
+        if generate_source:
+            glob.do_dummy_trace = True
+            ivy_graph.reload_sourcecode()
+            glob.do_dummy_trace = False
 
     # unwrap backend functions
     _unwrap_functions_from_dummy_tracing(
@@ -1742,7 +1773,7 @@ def symbolic_trace(
         path=None,
     )
 
-    return tracer_graph
+    return tracer_graph, ivy_graph
 
 
 # ----------------------------------------

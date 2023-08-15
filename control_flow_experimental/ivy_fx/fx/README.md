@@ -20,68 +20,78 @@ where:
 ```python
 import jax.numpy as jnp
 import control_flow_experimental.ivy_fx.fx as fx 
-from control_flow_experimental.autograph_ivy.core.api import to_functional_form
+import graph_compiler.globals as glob 
 
-def foo(x,y, z=None):
-    res = jnp.sin(x) + jnp.cos(y)
+def foo(x,y, z=None,):
+    res = torch.sin(x) + torch.cos(y)
     if z is not None: 
-        res += jnp.tan(z)
-    return res 
-    
-ivy.set_jax_backend()
-new_foo = to_functional_form(foo)
-g = fx.symbolic_trace(new_foo)
-ivy_g = fx.tracer_to_ivy_graph(g)
-ivy_g.reload_sourcecode()
+        res += torch.tan(z) 
+    return res + [1,2,3]
+
+glob.do_dummy_trace = True
+ivy.set_backend('torch') 
+x = ivy.array([1,2,3])
+y = ivy.array([4,5,6])
+z = ivy.array([7,8,9])
+
+torch_tracer_g, torch_ivy_g = fx.symbolic_trace(foo, args=(x,y,z))
+torch_ivy_g.reload_sourcecode(frontend='torch')
+ivy.set_backend('jax', dynamic=True)
+jax_tracer_g, jax_ivy_g = fx.symbolic_trace(torch_ivy_g, args=(x,y,z), frontend='torch', generate_source=True) 
 ```
 
 The `foo` function above takes in two required arguments, `x` and `y`, and an optional argument `z`. The function calculates the sum of the sine of `x` and the cosine of `y`. It uses a conditional to check if the optional argument `z` is provided, and if so, the function also adds the tangent of `z` to the result. 
-Running **symbolic tracing** on the above function yields the following Ivy Graph: 
+Running **symbolic tracing** twice on the above function yields the following Ivy Graph transpiled to JAX: 
 ```python
 import jax
 import jaxlib
 
 def compiled_fn(*args, **kwargs):
 
-    def pred_fn_140097340161760(*args, **kwargs):
-        p140097345432400 = args[0]
-        p140097345432592 = args[1]
-        p140097345469984 = (p140097345432592 is not None)
-        del p140097345432592
-        return bool(p140097345469984)
+    def pred_fn_139912365430080(*args, **kwargs):
+        p139912365438816 = args[0]
+        p139912365433152 = args[1]
+        p139912365428976 = (p139912365433152 is not None)
+        del p139912365433152
+        p139912365433104 = bool(p139912365428976)
+        del p139912365428976
+        return bool(p139912365433104)
 
-    def true_fn_140097340161760(*args, **kwargs):
-        p140097345466528 = args[0]
-        p140097345466912 = args[1]
-        p140097345433312 = jax.numpy.tan(p140097345466912)
-        p7572724925001163929 = p140097345466912
-        del p140097345466912
-        p140097344971728 = p140097345466528 + p140097345433312
-        del p140097345466528, p140097345433312
-        return p140097344971728, p7572724925001163929
+    def true_fn_139912365430080(*args, **kwargs):
+        p139912365439152 = args[0]
+        p139912365425760 = args[1]
+        p139912365427632 = jax.numpy.tan(p139912365425760)
+        p2079781071015729316 = p139912365425760
+        del p139912365425760
+        p139912365439872 = p139912365439152 + p139912365427632
+        del p139912365439152, p139912365427632
+        return p139912365439872, p2079781071015729316
 
-    def false_fn_140097340161760(*args, **kwargs):
-        p140097345468256 = args[0]
-        p140097345468640 = args[1]
-        p2068689357830479146 = p140097345468256
-        del p140097345468256
-        p6521571626717726693 = p140097345468640
-        del p140097345468640
-        return p2068689357830479146, p6521571626717726693
-    p140097345576144 = args[0]
-    p140097345576864 = args[1]
-    p140097345392800 = kwargs['z']
-    p140097345576480 = jax.numpy.sin(p140097345576144)
-    del p140097345576144
-    p140097345430864 = jax.numpy.cos(p140097345576864)
-    del p140097345576864
-    p140097345431200 = p140097345576480 + p140097345430864
-    del p140097345576480, p140097345430864
-    with jax.disable_jit(): p140097345432064 = jax.lax.cond(pred_fn_140097340161760(p140097345431200, p140097345392800),lambda *_: true_fn_140097340161760(p140097345431200, p140097345392800), lambda *_: false_fn_140097340161760(p140097345431200, p140097345392800))
+    def false_fn_139912365430080(*args, **kwargs):
+        p139912365437040 = args[0]
+        p139912365431328 = args[1]
+        p1264514798712448798 = p139912365437040
+        del p139912365437040
+        p6795413016519425161 = p139912365431328
+        del p139912365431328
+        return p1264514798712448798, p6795413016519425161
+    p139912367216560 = args[0]
+    p139912367216704 = args[1]
+    p139912365428256 = args[2]
+    c139912365725632 = kwargs['c139912365725632']
+    p139912365426096 = jax.numpy.sin(p139912367216560)
+    del p139912367216560
+    p139912365437712 = jax.numpy.cos(p139912367216704)
+    del p139912367216704
+    p139912365428928 = p139912365426096 + p139912365437712
+    del p139912365426096, p139912365437712
+    with jax.disable_jit(): p139912365431472 = jax.lax.cond(lambda p139912365428928, p139912365428256: pred_fn_139912365430080(p139912365428928, p139912365428256),lambda p139912365428928, p139912365428256: true_fn_139912365430080(p139912365428928, p139912365428256), lambda p139912365428928, p139912365428256: false_fn_139912365430080(p139912365428928, p139912365428256), p139912365428928, p139912365428256)
 
-    p140097344970912 = p140097345432064[0]
-    del p140097345432064
-    return p140097344970912
+    p139912365427920 = p139912365431472[0]
+    del p139912365431472
+    p139912365429888 = p139912365427920 + c139912365725632
+    del p139912365427920
+    return p139912365429888
 ```
 
 # Internal Structure
@@ -96,7 +106,7 @@ An `fx.Node` is a datastructure that represent individual operations within an `
 
 ## [Symbolic Tracer](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/_symbolic_trace.py#L571) ##
 
-`Tracer` is the class that implements the symbolic tracing functionality of `torch.fx.symbolic_trace`. A call to `symbolic_trace(m)` is equivalent to `Tracer().trace(m)`. Tracer can be subclassed to override various behaviors of the tracing process. The different behaviors that can be overridden are described in the docstrings of the methods on the class.
+`Tracer` is the class that implements the symbolic tracing functionality of `fx.symbolic_trace`. A call to `symbolic_trace(m)` is equivalent to `Tracer().trace(m)`. Tracer can be subclassed to override various behaviors of the tracing process. The different behaviors that can be overridden are described in the docstrings of the methods on the class.
 
 In the default implementation of `Tracer().trace`, the tracer first creates Proxy objects for all arguments in the `forward` function. (This happens in the call to `create_args_for_root`.) Next, the `forward` function is called with the new Proxy arguments. As the Proxies flow through the program, they record all the operations (function calls, method calls, and operators) that they touch into the growing FX Graph as Nodes.
 
