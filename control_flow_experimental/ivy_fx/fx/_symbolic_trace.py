@@ -1703,6 +1703,8 @@ def symbolic_trace(
     """
     
     """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
+    args= [ivy.array(arg) if arg is not None else arg for arg in args]
+    kwargs= {k:ivy.array(v) if v is not None else v for k,v in kwargs.items()}
     # wrap the native backend functions
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
