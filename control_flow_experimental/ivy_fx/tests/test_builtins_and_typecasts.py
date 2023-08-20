@@ -33,15 +33,14 @@ def test_min_max(fw):
     _, traced_fn = fx.symbolic_trace(orig_fn, args=([1, 2, 3],), generate_source=True)
     assert np.allclose(orig_fn([1, 2, 3]), traced_fn([1, 2, 3]))
 
-"""TODO: add sourcegen support to import builtin modules eg: math, itertools etc."""
-# @pytest.mark.parametrize("fw", ['jax', 'tensorflow', 'torch', 'numpy'])
-# def test_math_functions(fw):
-#     import math
+@pytest.mark.parametrize("fw", ['jax', 'tensorflow', 'torch', 'numpy'])
+def test_math_functions(fw):
+    import math
 
-#     def math_functions(x):
-#         return math.sin(x), math.cos(x)
+    def math_functions(x):
+        return math.sin(x), math.cos(x)
 
-#     orig_fn = math_functions
-#     ivy.set_backend(fw)
-#     _, traced_fn = fx.symbolic_trace(orig_fn, args=(ivy.array(1.0),), generate_source=True)
-#     assert np.allclose(orig_fn(ivy.array(1.0)), traced_fn(ivy.array(1.0)))
+    orig_fn = math_functions
+    ivy.set_backend(fw)
+    _, traced_fn = fx.symbolic_trace(orig_fn, args=(ivy.array(1.0),), generate_source=True)
+    assert np.allclose(orig_fn(ivy.array(1.0)), traced_fn(ivy.array(1.0)))
