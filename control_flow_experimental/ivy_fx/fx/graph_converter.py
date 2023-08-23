@@ -82,12 +82,14 @@ def _record_parameters_info(args, tracked_var_idxs=[]):
 
 def log_ivy_fn(graph, fn, ret, args, kwargs, to_ivy=False):
     """
-    This is the main mapping function that processes an fx Node and maps it 
+    This is the main mapping function that processes an fx Node and maps it
     to a corresponding IvyNode. Their is no computation performed here, but rather
-    the function extracts the input(s) and output(s) along with some 
+    the function extracts the input(s) and output(s) along with some
     other metadata and uses these to grow the Ivy Graph
     """
     glob.logging_stack.append(fn)
+
+    target_framework = "ivy" if to_ivy else ivy.current_backend_str()
 
     # check if there are slices with Proxy Nodes inside
     arg_tracked_slices_idxs = ivy.nested_argwhere(args, is_tracked_slice)
@@ -186,6 +188,37 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, to_ivy=False):
     output_vals = ivy.multi_index_nest(ret_list, node.output_tracked_idxs)
     node.output_param_ids = [_get_unique_id(x) for x in output_vals]
 
+    # determine if the function is a numpy function
+    fn_is_numpy = False
+    if graph._with_numpy:
+        if hasattr(fn, "__qualname__"):
+            fn_is_numpy = "ndarray" in fn.__qualname__
+
+        if not fn_is_numpy:
+            # check for method
+            if hasattr(fn, "__self__") and fn.__self__ is not None:
+                fn_is_numpy = "numpy" in str(fn.__self__.__class__)
+            # check for function
+            elif hasattr(fn, "__module__") and fn.__module__ is not None:
+                fn_is_numpy = "numpy" in fn.__module__ and "jax" not in fn.__module__
+
+    # added so tensorflow inplace variable updates work properly (return is set
+    # to first arg since this is the variable updated inplace)
+    # provide return value for __setattr__ and similar functions
+    inplace_fn = False
+    if (
+        fn.__name__
+        in ["__setattr__", "setitem"]
+        + glob.INPLACE_METHODS_WITHOUT_RET[target_framework]
+        + glob.INPLACE_FUNCTIONS_WITHOUT_RET[target_framework]
+    ) or (
+        fn_is_numpy
+        and fn.__name__
+        in glob.INPLACE_METHODS_WITHOUT_RET["numpy"]
+        + glob.INPLACE_FUNCTIONS_WITHOUT_RET["numpy"]
+    ):
+        inplace_fn = True
+
     # find any dependent parameters and add it to the global dict
     with_dependent_parameters = any(
         [x in glob.dependent_ids for x in input_parameter_ids]
@@ -210,7 +243,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, to_ivy=False):
     node.terminal = True
     node.is_constant = len(input_parameter_ids) == 0
     node.with_tracked_slices = arg_tracked_slices_idxs + kwarg_tracked_slices_idxs
-
+    node.inplace_fn = inplace_fn
     fns_in = [
         graph._id_to_function[id_]
         for id_ in input_parameter_ids

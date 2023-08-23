@@ -495,16 +495,15 @@ def _define_reflectable(orig_method_name):
 
 for orig_method_name in reflectable_magic_methods:
     _define_reflectable(orig_method_name)
+    
+for method in inplace_methods:
+    def _scope(method):
+        def impl(*args, **kwargs):
+            tracer = args[0].tracer
+            target = getattr(operator, method)
+            return tracer.create_proxy('call_function', target, args, kwargs, data=args[0].data)
+        impl.__name__ = method
+        as_magic = f'__{method.strip("_")}__'
+        setattr(Proxy, as_magic, impl)
+    _scope(method)
 
-def _define_inplace(orig_method_name):
-    method_name = f'__{orig_method_name}__'
-
-    def impl(self, rhs):
-        target = getattr(operator, orig_method_name)
-        return self.tracer.create_proxy('call_function', target, (self, rhs), {}, data=self.data)
-    impl.__name__ = method_name
-    impl.__qualname__ = method_name
-    setattr(Proxy, method_name, impl)
-
-for orig_method_name in inplace_methods:
-    _define_inplace(orig_method_name)
