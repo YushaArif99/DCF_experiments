@@ -13,7 +13,7 @@ $$
 where:
 - $F(n)$ represents a node in the FX graph.
 - $I(n)$ represents the corresponding node in the Ivy Graph.
-- $\mathcal{T}$ represents the transformation function (i.e [`log_ivy_fn`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/graph_converter.py#L83)) that maps a node in the FX graph to a corresponding node in the Ivy Graph.
+- $\mathcal{T}$ represents the transformation function (i.e [`log_ivy_fn`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/graph_converter.py#L83)) that maps a node in the FX graph to a corresponding node in the Ivy Graph.
 
 
 
@@ -96,21 +96,21 @@ def compiled_fn(*args, **kwargs):
 
 # Internal Structure
 
-## [Graph](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/graph.py#L671) ##
+## [Graph](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/graph.py#L671) ##
 The `fx.Graph` is a core data structure in FX that represents the operations and their dependencies in a structured format. It consists of a List of `fx.Node` representing individual operations and their inputs and outputs. The Graph enables simple manipulation and analysis of the model structure, which is essential for implementing various transformations and optimizations.
 
-## [Node](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/node.py#L116) ##
+## [Node](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/node.py#L116) ##
 An `fx.Node` is a datastructure that represent individual operations within an `fx.Graph`, it maps to callsites such as operators, methods and modules. Each `fx.Node` keeps track of its inputs, the previous and next nodes, the stacktrace so you can map back the node to a line of code in your python file and some optional metadata stored in a `meta` dict.
 
 # Tracing
 
-## [Symbolic Tracer](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/_symbolic_trace.py#L571) ##
+## [Symbolic Tracer](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/_symbolic_trace.py#L571) ##
 
 `Tracer` is the class that implements the symbolic tracing functionality of `fx.symbolic_trace`. A call to `symbolic_trace(m)` is equivalent to `Tracer().trace(m)`. Tracer can be subclassed to override various behaviors of the tracing process. The different behaviors that can be overridden are described in the docstrings of the methods on the class.
 
 In the default implementation of `Tracer().trace`, the tracer first creates Proxy objects for all arguments in the `forward` function. (This happens in the call to `create_args_for_root`.) Next, the `forward` function is called with the new Proxy arguments. As the Proxies flow through the program, they record all the operations (function calls, method calls, and operators) that they touch into the growing FX Graph as Nodes.
 
-## [Proxy](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/proxy.py#L274) ##
+## [Proxy](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/proxy.py#L274) ##
 
 Proxy objects are Node wrappers used by the Tracer to record operations seen during symbolic tracing. The mechanism through which Proxy objects record computation is via the `_dummy_trace_func` wrapper. During execution, operations on Proxy are dispatched to the `_dummy_trace_func` wrapper, which records the operation in the Graph as a Node. The Node that was recorded in the Graph is then itself wrapped in a Proxy, facilitating further application of ops on that value.
 
@@ -133,8 +133,8 @@ To facilitate easier analysis of data dependencies, Nodes have read-only propert
 
 Symbolic Tracing has limitations in that it can't deal with dynamic control flow and is limited to outputting a single graph at a time. To overcome the limitations, we basically employ AST Transformations to transform incompatible language constructs into a form that the tracer can handle. This includes (but is not limited to):
 - transforming control flow such as if statements and while loops into `ivy.if_else` and `ivy.while_loop` respectively
-- transforming python boolean operations such as `and`,`or` into an equivalent op (eg: [`fx.bool_and`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/_symbolic_trace.py#L1799), [`fx.bool_or`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/_symbolic_trace.py#L1798), etc.)
-- transforming iterator/dictionary unpacking statements into a functional equivalent op (eg: [`fx.iter_proxy`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/_symbolic_trace.py#L1779),[`fx.dict_proxy`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/ivy_fx/fx/_symbolic_trace.py#L1788))
+- transforming python boolean operations such as `and`,`or` into an equivalent op (eg: [`cfe.bool_and`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/autograph_ivy/core/ast_transforms.py#L10), [`cfe.bool_or`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/autograph_ivy/core/ast_transforms.py#L6), etc.)
+- transforming iterator/dictionary unpacking statements into a functional equivalent op (eg: [`fx.iter_proxy`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/_symbolic_trace.py#L1909),[`fx.dict_proxy`](https://github.com/unifyai/graph-compiler/blob/ivy_symbolic_tracing/control_flow_experimental/ivy_fx/fx/_symbolic_trace.py#L1918))
 
 
 # WIP #
