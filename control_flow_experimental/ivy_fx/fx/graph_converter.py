@@ -80,7 +80,7 @@ def _record_parameters_info(args, tracked_var_idxs=[]):
     )
 
 
-def log_ivy_fn(graph, fn, ret, args, kwargs, to_ivy=False):
+def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_stateful_idxs=[], to_ivy=False):
     """
     This is the main mapping function that processes an fx Node and maps it
     to a corresponding IvyNode. Their is no computation performed here, but rather
@@ -110,7 +110,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, to_ivy=False):
         _,
         node.iter_proxies,
         _,
-    ) = _record_parameters_info(args)
+    ) = _record_parameters_info(args, arg_stateful_idxs)
 
     (
         node.kwarg_tracked_idxs,
@@ -121,7 +121,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, to_ivy=False):
         _,
         _,
         node.dict_proxies,
-    ) = _record_parameters_info(kwargs)
+    ) = _record_parameters_info(kwargs, kwarg_stateful_idxs)
 
     # set the backend function
     backend_fn = fn
@@ -363,12 +363,16 @@ def _create_ivy_fn(node, to_ivy=False):
             node.kwargs = ivy.nested_map(
                 node.kwargs, lambda x: x.c if isinstance(x, Constant) else x
             )
+            arg_stateful_idxs = node.meta['arg_stateful_idxs'] if node.meta.get('arg_stateful_idxs') else []
+            kwarg_stateful_idxs = node.meta['kwarg_stateful_idxs'] if node.meta.get('kwarg_stateful_idxs') else []
             _ = log_ivy_fn(
                 graph,
                 fn=node.target,
                 ret=node,
                 args=node.args,
                 kwargs=node.kwargs,
+                arg_stateful_idxs=arg_stateful_idxs,
+                kwarg_stateful_idxs=kwarg_stateful_idxs,
                 to_ivy=to_ivy,
             )
 
@@ -415,11 +419,13 @@ def _create_graph(
     var_kwargs=False,
     to_ivy=False,
     with_numpy=False,
+    stateful=None,
 ):
     # dummy inputs to initialize the graph
     args = [ivy.native_array([]) for _ in graph_args]
     kwargs = {k: ivy.native_array([]) for k, v in graph_kwargs.items()}
-    ivy_graph = Graph(fn, to_ivy=to_ivy, with_numpy=with_numpy, *args, **kwargs)
+    stateful = stateful if isinstance(stateful,list) else [stateful]
+    ivy_graph = Graph(fn, to_ivy=to_ivy, with_numpy=with_numpy, stateful=stateful, *args, **kwargs)
     ivy_graph._args = graph_args
     ivy_graph._kwargs = graph_kwargs
     ivy_graph.var_args = var_args
@@ -466,8 +472,8 @@ def _create_graph(
     return ivy_graph
 
 
-def tracer_to_ivy_graph(tracer_graph, fn=None, to_ivy=False, with_numpy=False):
-    graph_args, graph_kwargs, graph_functions, graph_outputs = [], {}, [], []
+def tracer_to_ivy_graph(tracer_graph, fn=None, stateful=None, to_ivy=False, with_numpy=False,):
+    graph_args, graph_functions, graph_outputs, graph_kwargs = [], [], [], {}
     var_args, var_kwargs = False, False
     for node in tracer_graph.nodes:
         if node.op == "placeholder":
@@ -481,6 +487,18 @@ def tracer_to_ivy_graph(tracer_graph, fn=None, to_ivy=False, with_numpy=False):
                 graph_kwargs[node.name] = node
             else:
                 graph_args.append(node)
+        elif node.op == "get_attr":
+            # convert a get_attr node as a call_function node
+            node.op = "call_function"
+            node.args = (stateful, node.target)
+            # this is simply a placeholder function. the actual operation
+            # will be generated during sourcegen
+            nested_attrgetter = lambda *_: None
+            setattr(nested_attrgetter,'__name__', 'nested_attrgetter')
+            node.target = nested_attrgetter
+
+            node.meta['arg_stateful_idxs'] = [[0]]
+            graph_functions.append(_create_ivy_fn(node))
         elif node.op in ("call_function", "call_method"):
             graph_functions.append(_create_ivy_fn(node))
         else:
@@ -496,4 +514,5 @@ def tracer_to_ivy_graph(tracer_graph, fn=None, to_ivy=False, with_numpy=False):
         var_kwargs=var_kwargs,
         to_ivy=to_ivy,
         with_numpy=with_numpy,
+        stateful=stateful
     )
