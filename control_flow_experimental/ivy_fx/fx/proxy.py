@@ -28,6 +28,11 @@ from ._compatibility import compatibility
 from .immutable_collections import Constant
 import ivy
 
+# import frontend tensors
+from ivy.functional.frontends.torch import Tensor
+from ivy.functional.frontends.jax import DeviceArray
+from ivy.functional.frontends.tensorflow import EagerTensor
+from ivy.functional.frontends.numpy import ndarray
 
 
 __all__ = [
@@ -201,7 +206,7 @@ class TracerBase:
         node = self.create_node(kind, target, args_, kwargs_, name, type_expr)
 
         if not proxy_factory_fn:
-            proxy = self.proxy(node, data)
+            proxy = self.proxy(node, data, frontend=frontend)
         else:
             proxy = proxy_factory_fn(node)
 
@@ -371,8 +376,9 @@ class Proxy:
             tracer = GraphAppendingTracer(node.graph)
         self.tracer = tracer
         self.node = node
-        self._data = data
-
+        self._meta_tensor = data
+        self.frontend = None 
+        
     def __repr__(self) -> str:
         return f"Proxy({self.node.name})"
 
@@ -473,61 +479,96 @@ class Proxy:
 
 
 @compatibility(is_backward_compatible=True)
-class IvyProxy(Proxy, ivy.Array):
+class IvyProxy(ivy.Array, Proxy):
     """
     A special proxy which lets "shape","dtype","size", and a few other
     attribute accesses pass through to our underlying  Ivy API,
     so that conditional tests on these attributes will not throw exception during tracing
     """
-    def __init__(self, node: Node, tracer: 'Optional[TracerBase]' = None, data=None):
-        super(IvyProxy, self).__init__(node, tracer)
-        ivy.Array.__init__(self,data)
-        self._native_data = self._data 
-        self._data = self
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None):
+        super(IvyProxy, self).__init__(data) 
+        Proxy.__init__(self, node, tracer, data)
+        self._ivy_data = data
 
     def __repr__(self):
-        return f'IvyProxy({self.node.name})'
-    
-    @property
-    def data(self) -> ivy.NativeArray:
-        """The native array being wrapped in self."""
-        return self._native_data
+        return f"IvyProxy({self.node.name})"
 
-    @property
-    def dtype(self) -> ivy.Dtype:
-        """Data type of the array elements."""
-        if self._dtype is None:
-            self._dtype = ivy.dtype(self._native_data)
-        return self._dtype
+    
 
-    @property
-    def device(self) -> ivy.Device:
-        """Hardware device the array data resides on."""
-        if self._device is None:
-            self._device = ivy.dev(self._native_data)
-        return self._device
-    
-    @property
-    def shape(self) -> ivy.Shape:
-        """Array dimensions."""
-        return ivy.Shape(self._native_data.shape)
-    
-    @property
-    def ndim(self) -> int:
-        """Number of array dimensions (axes)."""
-        return len(tuple(self._native_data.shape))
-    
-    @property
-    def size(self) -> Optional[int]:
-        """Number of elements in the array."""
-        if self._size is None:
-            self._size = (
-                functools.reduce(operator.mul, self._native_data.shape)
-                if len(self._native_data.shape) > 0
-                else 0
-            )
-        return self._size
-    
+# Frontend Proxies
+@compatibility(is_backward_compatible=True)
+class Torch_FrontendProxy(Tensor, Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Frontend API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None):
+        super(Torch_FrontendProxy, self).__init__(data)
+        Proxy.__init__(self, node, tracer, data)
+        self._ivy_data = self._ivy_array
+        self.frontend = 'torch'
+
+    def __repr__(self):
+        return f"Torch_FrontendProxy({self.node.name})"
+
+
+@compatibility(is_backward_compatible=True)
+class JAX_FrontendProxy(DeviceArray, Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Frontend API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None):
+        super(JAX_FrontendProxy, self).__init__(data)
+        Proxy.__init__(self, node, tracer, data)
+        self._native_data = self._data
+        self.frontend = 'jax'
+
+    def __repr__(self):
+        return f"JAX_FrontendProxy({self.node.name})"
+
+
+@compatibility(is_backward_compatible=True)
+class TF_FrontendProxy(EagerTensor, Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Frontend API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None):
+        super(TF_FrontendProxy, self).__init__(data)
+        Proxy.__init__(self, node, tracer, data)
+        self._native_data = self._data
+        self.frontend = 'tensorflow'
+
+    def __repr__(self):
+        return f"TF_FrontendProxy({self.node.name})"
+
+
+@compatibility(is_backward_compatible=True)
+class Numpy_FrontendProxy(ndarray, Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Frontend API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None):
+        super(Numpy_FrontendProxy, self).__init__(shape=data.shape, dtype=data.dtype)
+        Proxy.__init__(self, node, tracer, data)
+        self._native_data = self._data
+        self.frontend = 'numpy'
+
+    def __repr__(self):
+        return f"Numpy_FrontendProxy({self.node.name})"
+
+
 @compatibility(is_backward_compatible=True)
 class Attribute(Proxy):
     @compatibility(is_backward_compatible=True)
@@ -536,7 +577,7 @@ class Attribute(Proxy):
         self.attr = attr
         self.tracer = root.tracer
         self._node: Optional[Node] = None
-        self._data = root.data
+
     @property
     def node(self):
         # the node for attributes is added lazily, since most will just be method calls
@@ -595,12 +636,12 @@ for method in magic_methods:
             tracer = args[0].tracer
             target = getattr(operator, method)
             return tracer.create_proxy(
-                "call_function", target, args, kwargs, data=args[0].data
+                "call_function", target, args, kwargs, data=None,
             )
 
         impl.__name__ = method
         as_magic = f'__{method.strip("_")}__'
-        setattr(Proxy, as_magic, impl)
+        setattr(Proxy, as_magic, impl) 
 
     _scope(method)
 
@@ -611,7 +652,7 @@ def _define_reflectable(orig_method_name):
     def impl(self, rhs):
         target = getattr(operator, orig_method_name)
         return self.tracer.create_proxy(
-            "call_function", target, (rhs, self), {}, data=self.data
+            "call_function", target, (rhs, self), {}, data=None
         )
 
     impl.__name__ = method_name
@@ -629,7 +670,7 @@ for method in inplace_methods:
             tracer = args[0].tracer
             target = getattr(operator, method)
             return tracer.create_proxy(
-                "call_function", target, args, kwargs, data=args[0].data
+                "call_function", target, args, kwargs, data=None
             )
 
         impl.__name__ = method
@@ -638,3 +679,10 @@ for method in inplace_methods:
 
     _scope(method)
 
+
+FRONTEND_PROXIES = {
+    "torch": Torch_FrontendProxy,
+    "jax": JAX_FrontendProxy,
+    "tensorflow": TF_FrontendProxy,
+    "numpy": Numpy_FrontendProxy,
+}

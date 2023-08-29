@@ -33,6 +33,14 @@ from .graph import _PyTreeCodeGen, _PyTreeInfo, Graph
 from .node import Argument, base_types, map_aggregate
 from .proxy import Proxy, ParameterProxy, IvyProxy, TracerBase, Scope, ScopeContextManager
 from .graph_converter import tracer_to_ivy_graph
+from .func_wrappers import (
+    add_custom_decorator,
+    proxies_to_native_arrays,
+    native_arrays_to_proxies,
+    proxies_to_ivy_arrays,
+    ivy_arrays_to_proxies,
+    convert_proxies_to_ivy_arrays
+)
 
 import graph_compiler.globals as glob
 from graph_compiler.wrapping import FUNC_TO_PATH
@@ -1019,6 +1027,7 @@ class Tracer(TracerBase):
                 {},
                 type_expr=fn_for_analysis.__annotations__.get(name, None),
                 data=proxy_data,
+                frontend=frontend,
             )
 
         arg_names = [next(names_iter) for idx in range(skip_arg_idx, total_args)]
@@ -1116,6 +1125,7 @@ class Tracer(TracerBase):
         root: Union[torch.nn.Module, Callable[..., Any]],
         constant_args: Optional[Dict[str, Any]] = None,
         args=[],
+        frontend=None,
         **kwargs,
     ) -> Graph:
         """
@@ -1347,7 +1357,7 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy.data
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1402,7 +1412,7 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy.data
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1432,7 +1442,7 @@ def _dummy_tracing_func(orig_fn):
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy.data
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor,  frontend=proxy.frontend
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return return_proxy
@@ -1457,7 +1467,7 @@ def _create_wrapped_method(cls, name):
         proxy = _find_proxy(args, kwargs)
         if proxy is not None:
             return proxy.tracer.create_proxy(
-                "call_method", name, args, kwargs, data=proxy.data
+                "call_method", name, args, kwargs, data=proxy._meta_tensor
             )
         return orig_fn(*args, **kwargs)
 
@@ -1557,22 +1567,44 @@ class _Patcher:
             self.patches_made.pop().revert()
         self.visited.clear()
 
-def _patch_modules(patcher: _Patcher, modules: List[Dict[str, Any]], wrap_fn: Callable, wrap_all_fns=False, framework=None):
+
+def _patch_modules(
+    patcher: _Patcher,
+    modules: List[Dict[str, Any]],
+    wrap_fn: Callable,
+    wrap_all_fns=False,
+    framework=None,
+):
     """
     Iterate through the ``modules`` list and, for each object, wrap
     the listed functions using the `wrap_fn` wrapper.
     """
     for module in modules:
-        for name in dir(module):
+        for name in dir(module): 
             orig_func = getattr(module, name)
-            if not wrap_all_fns and orig_func in glob.FUNCTIONS_ATTRS_NOT_TO_WRAP[framework] or not _should_be_wrapped(orig_func) :
+            if (
+                name
+                in FN_DECORATORS 
+                + ["handle_numpy_arrays_in_specific_backend", "casting_modes_ops"]
+                + glob.IVY_FUNCTIONS_NOT_TO_WRAP 
+                or not _should_be_wrapped(orig_func)
+                or name[0] == "_"
+            ):
                 continue
+            elif name in glob.IVY_FUNCTIONS_NOT_TO_TRACK:
+                if orig_func.__class__.__name__ == "ufunc":
+                    patcher.patch_method(
+                        module, name, convert_proxies_to_ivy_arrays(orig_func.func)
+                    )
+                else:
+                    patcher.patch_method(module, name, convert_proxies_to_ivy_arrays(orig_func))
             else:
                 if orig_func.__class__.__name__ == "ufunc":
                     patcher.patch_method(module, name, wrap_fn(orig_func.func))
                 else:
                     patcher.patch_method(module, name, wrap_fn(orig_func))
-                             
+
+
 def _patch_wrapped_functions(patcher: _Patcher):
     """
     Go through ``_wrapped_fn_patch_table`` and, for each frame object, wrap
@@ -1736,10 +1768,16 @@ def symbolic_trace(
     Returns:
         Graph: an fx graph created from the recorded operations from ``root``.
     """
-    
+
     """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
-    args= [ivy.array(arg) if arg is not None else arg for arg in args]
-    kwargs= {k:ivy.array(v) if v is not None else v for k,v in kwargs.items()}
+    if frontend is None:  # we will create IvyProxies
+        args = [ivy.array(arg) if ivy.is_array(arg) else arg for arg in args]
+        kwargs = {k: ivy.array(v) if ivy.is_array(v) else v for k, v in kwargs.items()}
+    else:
+        args = [ivy.native_array(arg) if ivy.is_array(arg) else arg for arg in args]
+        kwargs = {
+            k: ivy.native_array(v) if ivy.is_array(v) else v for k, v in kwargs.items()
+        }
     # wrap the native backend functions
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
@@ -1750,23 +1788,56 @@ def symbolic_trace(
 
     with _Patcher() as patcher:
         framework = ivy.current_backend_str()
-        ivy_modules = _load_modules_from(glob.MODULES_TO_WRAP['ivy'],add_path=None)
-        backend_modules = _load_modules_from(glob.MODULES_TO_WRAP[framework],add_path='backend')
-        frontend_modules = None if not frontend else _load_modules_from(glob.MODULES_TO_WRAP[frontend],add_path='frontend')
-        # remove decorators from ivy functions
-        _patch_modules(patcher, ivy_modules, lambda fn: inspect.unwrap(fn), wrap_all_fns=True)
-        # remove decorators from ivy backend functions
-        _patch_modules(patcher, backend_modules, lambda fn: inspect.unwrap(fn), wrap_all_fns=True)
+        ivy_modules = _load_modules_from(glob.MODULES_TO_WRAP["ivy"], add_path=None)
+        backend_modules = _load_modules_from(
+            glob.MODULES_TO_WRAP[framework], add_path="backend"
+        )
+        frontend_modules = (
+            None
+            if not frontend
+            else _load_modules_from(glob.MODULES_TO_WRAP[frontend], add_path="frontend")
+        )
+        # custom wrap ivy functions
+        _patch_modules(
+            patcher,
+            ivy_modules,
+            lambda fn: add_custom_decorator(
+                [proxies_to_native_arrays, native_arrays_to_proxies],
+                fn,
+                positions=(0, -1),
+            ),
+            framework="ivy",
+        )
+        # # custom wrap backend functions
+        # _patch_modules(
+        #     patcher,
+        #     backend_modules,
+        #     lambda fn: add_custom_decorator(
+        #         [proxies_to_native_arrays, native_arrays_to_proxies],
+        #         fn,
+        #         positions=(0, -1),
+        #     ),
+        #     framework=framework,
+        # )
         if frontend is not None:
-            # remove decorators from ivy frontend functions
-            _patch_modules(patcher, frontend_modules, lambda fn: inspect.unwrap(fn), wrap_all_fns=True)
+            # custom wrap frontend functions
+            _patch_modules(
+                patcher,
+                frontend_modules,
+                lambda fn: add_custom_decorator(
+                    [proxies_to_ivy_arrays, ivy_arrays_to_proxies],
+                    fn,
+                    positions=(0, -1),
+                ),
+                framework=frontend,
+            )
 
         # explicitly wrap ivy control flow ops since we wont trace into tf.cond/jax.lax.cond etc.
         for f in [ivy.if_else, ivy.if_exp, ivy.for_loop, ivy.while_loop]:
             patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f))
 
-        # explicitly wrap all ast transform functions 
-        for name,f in cfe.transform_funcs.items():
+        # explicitly wrap all ast transform functions
+        for name, f in cfe.transform_funcs.items():
             patcher.patch_method(cfe, name, _dummy_tracing_func(f))
         
         # first transform the root function
@@ -1783,9 +1854,18 @@ def symbolic_trace(
             tracer = Tracer()
             if isinstance(root, IvyGraph):
                 root._scripted_call.constants = root.constants
-                tracer_graph = tracer.trace(root._scripted_call, constant_args, args=args, **kwargs, **root.constants)
+                tracer_graph = tracer.trace(
+                    root._scripted_call,
+                    constant_args,
+                    args=args,
+                    frontend=frontend,
+                    **kwargs,
+                    **root.constants,
+                )
             else:
-                tracer_graph = tracer.trace(root, constant_args, args=args, **kwargs)
+                tracer_graph = tracer.trace(
+                    root, constant_args, args=args, frontend=frontend, **kwargs
+                )
         except SymTraceError:
             raise ivy.utils.exceptions.IvyException(
                 message="Error while symbolically tracing the function."
