@@ -1712,6 +1712,9 @@ def symbolic_trace(
     to_ivy: bool = False,
     with_numpy: bool = False,
     generate_source: bool = False,
+    control_flow: bool = False,
+    debug_mode: bool = False,
+    stateful: Optional[List] = None,
     **kwargs,
 ) -> Graph:
     """
@@ -1839,17 +1842,18 @@ def symbolic_trace(
         # explicitly wrap all ast transform functions
         for name, f in cfe.transform_funcs.items():
             patcher.patch_method(cfe, name, _dummy_tracing_func(f))
-        
-        # first transform the root function
-        try:
-            if isinstance(root, IvyGraph):
-                root._scripted_call = cfe.to_functional_form(root._scripted_call)
-            else:
-                root = cfe.to_functional_form(root)
-        except ASTTransformationError:
-            raise ivy.utils.exceptions.IvyException(
-                message="Error while AST transforming the function."
-            )    
+
+        # transform the root function if control_flow = True 
+        if control_flow:
+            try:
+                if isinstance(root, IvyGraph):
+                    root._scripted_call = cfe.to_functional_form(root._scripted_call)
+                else:
+                    root = cfe.to_functional_form(root)
+            except ASTTransformationError:
+                raise ivy.utils.exceptions.IvyException(
+                    message="Error while AST transforming the function."
+                )
         try:
             tracer = Tracer()
             if isinstance(root, IvyGraph):
@@ -1870,9 +1874,13 @@ def symbolic_trace(
             raise ivy.utils.exceptions.IvyException(
                 message="Error while symbolically tracing the function."
             )
+        if debug_mode:
+            return tracer_graph, None
         # convert the tracer graph into an ivy graph
         try:
-            ivy_graph = tracer_to_ivy_graph(tracer_graph,root, to_ivy=to_ivy, with_numpy=with_numpy)
+            ivy_graph = tracer_to_ivy_graph(
+                tracer_graph, root, to_ivy=to_ivy, with_numpy=with_numpy, stateful=stateful,
+            )
         except GraphConvertError:
             raise ivy.utils.exceptions.IvyException(
                 message="Error while converting the tracer graph to an ivy graph."
