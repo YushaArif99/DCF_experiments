@@ -170,9 +170,9 @@ class TracerBase:
             return (
             frontend_proxy(node, self, data=data) if data is not None else Proxy(node, self)
         ) 
-
+        assert not isinstance(data, ivy.Array), f"incompatible type({type(data)} passed when creating NativeProxies)"
         return (
-            IvyProxy(node, self, data=data) if data is not None else Proxy(node, self)
+            NativeProxy(node, self, native_data=data) if data is not None else Proxy(node, self)
         )
 
     @compatibility(is_backward_compatible=True)
@@ -494,7 +494,25 @@ class IvyProxy(ivy.Array, Proxy):
     def __repr__(self):
         return f"IvyProxy({self.node.name})"
 
+@compatibility(is_backward_compatible=True)
+class NativeProxy(Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, native_data=None):
+        super(NativeProxy, self).__init__(node, tracer, native_data) 
+        self._native_data = native_data
+
+    def __repr__(self):
+        return f"NativeProxy({self.node.name})"
     
+    def __getattr__(self, k) -> "Attribute":
+        return getattr(self._native_data, k)
+
+
 
 # Frontend Proxies
 @compatibility(is_backward_compatible=True)
@@ -628,7 +646,8 @@ class ParameterProxy(Proxy):
 
     def nelement(self):
         return self.param.nelement()
-    
+
+# define dunder methods for the Proxy class     
 for method in magic_methods:
 
     def _scope(method):
@@ -679,6 +698,47 @@ for method in inplace_methods:
 
     _scope(method)
 
+# define dunder methods for the NativeProxy class     
+for method in magic_methods:
+
+    def _scope(method):
+        def impl(*args, **kwargs):
+            native_method =  getattr(args[0]._native_data, method)
+            return native_method(*args,**kwargs)
+
+        impl.__name__ = method
+        setattr(NativeProxy, method, impl) 
+    method = f'__{method.strip("_")}__'
+    _scope(method)
+
+
+def _define_reflectable(orig_method_name):
+    method_name = f'__r{orig_method_name.strip("_")}__'
+
+    def impl(self, rhs):
+        native_reflectable = getattr(self._native_data, orig_method_name)
+        return native_reflectable(self, rhs)
+
+    impl.__name__ = method_name
+    impl.__qualname__ = method_name
+    setattr(NativeProxy, method_name, impl)
+
+
+for orig_method_name in reflectable_magic_methods:
+    _define_reflectable(orig_method_name)
+
+for method in inplace_methods:
+
+    def _scope(method):
+        def impl(*args, **kwargs):
+            native_inp_method = getattr(args[0]._native_data, method)
+            return native_inp_method(*args, **kwargs)
+
+        impl.__name__ = method
+        as_magic = f'__{method.strip("_")}__'
+        setattr(NativeProxy, as_magic, impl)
+
+    _scope(method)
 
 FRONTEND_PROXIES = {
     "torch": Torch_FrontendProxy,
