@@ -93,7 +93,7 @@ def load_ast(nodes,
         nodes = (nodes,)
 
     source = parser.unparse(nodes, indentation=indentation)
-    module, _ = load_source(source, delete_on_exit)
+    module, filename = load_source(source, delete_on_exit)
 
     if include_source_map:
         source_map = origin_info.create_source_map(nodes, source, module.__file__)
@@ -101,4 +101,4 @@ def load_ast(nodes,
         source_map = None
 
     # TODO(mdan): Return a structured object.
-    return module, source, source_map
+    return module, source, source_map, filename

@@ -34,24 +34,46 @@ class _Function(object):
 class FunctionTransformer(converter.Base):
     """Wraps function bodies around autograph-specific boilerplate."""
 
+    def _function_scope_options(self, fn_scope):
+        """Returns the options with which to create function scopes."""
+        # Top-level function receive the options that were directly requested.
+        # All others receive the options corresponding to a recursive conversion.
+        # Note: this mainly controls the user_requested flag, which is important
+        # primarily because the FunctionScope context also creates a
+        # ControlStatusCtx(autograph=ENABLED) when user_requested is True. See
+        # function_wrappers.py.
+        if fn_scope.level == 2:
+            return self.ctx.user.options
+        return self.ctx.user.options.call_options()
+
     def visit_Lambda(self, node):
         with self.state[_Function] as fn_scope:
             node = self.generic_visit(node)
 
             scope = anno.getanno(node, anno.Static.SCOPE)
-            function_context_name = self.ctx.namer.new_symbol('lscope',
-                                                                                                                scope.referenced)
+            function_context_name = self.ctx.namer.new_symbol('lscope', scope.referenced)
             fn_scope.context_name = function_context_name
             anno.setanno(node, 'function_context_name', function_context_name)
 
+            template = """
+                ivy__.with_function_scope(
+                    lambda function_context: body, function_context_name, options)
+            """
+            node.body = templates.replace_as_expression(
+                template,
+                options=self._function_scope_options(fn_scope).to_ast(),
+                function_context=function_context_name,
+                function_context_name=gast.Constant(function_context_name, kind=None),
+                body=node.body
+            )
+    
             return node
 
     def visit_FunctionDef(self, node):
         with self.state[_Function] as fn_scope:
             scope = anno.getanno(node, annos.NodeAnno.BODY_SCOPE)
 
-            function_context_name = self.ctx.namer.new_symbol('fscope',
-                                                                                                                scope.referenced)
+            function_context_name = self.ctx.namer.new_symbol('fscope', scope.referenced)
             fn_scope.context_name = function_context_name
             anno.setanno(node, 'function_context_name', function_context_name)
 
@@ -71,9 +93,24 @@ class FunctionTransformer(converter.Base):
                     docstring_node = first_statement
                     node.body = node.body[1:]
 
-            if docstring_node is not None:
-                node.body = [docstring_node] + node.body
+                template = """
+                    with ivy__.FunctionScope(
+                        function_name, context_name, options) as function_context:
+                        body
+                """
+                wrapped_body = templates.replace(
+                    template,
+                    function_name=gast.Constant(node.name, kind=None),
+                    context_name=gast.Constant(function_context_name, kind=None),
+                    options=self._function_scope_options(fn_scope).to_ast(),
+                    function_context=function_context_name,
+                    body=node.body
+                )
 
+            if docstring_node is not None:
+                wrapped_body = [docstring_node] + wrapped_body
+
+            node.body = wrapped_body
             return node
 
 

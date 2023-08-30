@@ -142,8 +142,8 @@ def parse_entity(entity, future_features):
     """
     if inspect_utils.islambda(entity):
         return _parse_lambda(entity)
-    
-    if hasattr(entity,"source_code"):
+
+    if hasattr(entity, "source_code"):
         original_source = entity.source_code
     else:
         try:

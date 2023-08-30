@@ -17,6 +17,8 @@ from . import core
 from .core import *
 from . import converters
 from .converters import *
+from . import operators
+from .operators import *
 from . import pyct
 from .pyct import *
 from . import test_suite

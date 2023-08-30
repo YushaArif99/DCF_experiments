@@ -23,8 +23,8 @@ from . import return_statements
 from . import boolean_operators
 from . import builtins_type_casts
 from . import return_statements
-from . import assigns
-from . import comparison
+
+
 """
 Naming conventions:
  * each converter should specialize on a single idiom; be consistent with
