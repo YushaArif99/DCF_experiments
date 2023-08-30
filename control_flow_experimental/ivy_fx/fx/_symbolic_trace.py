@@ -45,6 +45,7 @@ from .func_wrappers import (
 import graph_compiler.globals as glob
 from graph_compiler.wrapping import FUNC_TO_PATH
 from graph_compiler.graph import Graph as IvyGraph
+from graph_compiler.numpy_proxy import custom_np_classes, custom_np_class_names
 import numpy as np
 import ivy
 from ivy.func_wrapper import FN_DECORATORS
@@ -143,6 +144,22 @@ def _should_be_wrapped(obj):
         and not (hasattr(obj, "__module__") and obj.__module__ == "typing")
     )
 
+def _not_to_trace(orig_fn, *args, **kwargs):
+    # attributes to ignore
+    att_name = None
+    if orig_fn.__name__ in ["__getattr__", "__setattr__", "__getattribute__"]:
+        att_name = args[0]
+        # return if the attribute being retrieved is another built-in method
+        if att_name[0:2] == "__":
+            return True
+        # if the attribute is not recognized as one which can form part of the graph, then return
+        if (
+            att_name
+            not in glob.GRAPH_ATTRIBUTES[ivy.current_backend_str()] 
+        ):
+            True
+    
+    return False
 
 def _wrap_or_unwrap_module(
     wrap_or_unwrap_fn,
@@ -172,27 +189,17 @@ def _wrap_or_unwrap_module(
 
 
 def _wrap_or_unwrap_class(
-    wrap_or_unwrap_fn,
-    cls,
-    cls_path=None,
-    framework=None,
-    to_ivy=False,
-    wrap_or_unwrap_all=False,
+    wrap_or_unwrap_fn, cls, cls_path=None, framework=None, to_ivy=False
 ):
     if cls is None:
         return
-    framework = (
-        "ivy"
-        if to_ivy
-        else ivy.current_backend_str()
-        if framework is None
-        else framework
-    )
+    framework = ivy.current_backend_str() if framework is None else framework
+    framework = "ivy" if to_ivy else framework
     for k in dir(cls):
         attr = getattr(cls, k)
-        if (
-            not wrap_or_unwrap_all and k in glob.FUNCTIONS_ATTRS_NOT_TO_WRAP[framework]
-        ) or not _should_be_wrapped(attr):
+        if k in glob.FUNCTIONS_ATTRS_NOT_TO_WRAP[framework] or not _should_be_wrapped(
+            attr
+        ):
             continue
         if ivy.current_backend_str() == "jax":
             import jaxlib
@@ -201,12 +208,27 @@ def _wrap_or_unwrap_class(
                 if attr == jaxlib.xla_extension.ArrayImpl.__init__:
                     continue
         try:
-            setattr(cls, k, wrap_or_unwrap_fn(attr))
-        except Exception:
+            if hasattr(getattr(cls, k), "__name__"):
+                if getattr(cls, k).__name__ != "":
+                    setattr(cls, k, wrap_or_unwrap_fn(attr))
+        except Exception as e:
             pass
         if cls_path is not None:
-            FUNC_TO_PATH[attr] = ".".join(cls_path) + "." + k
+            if cls_path == "NewNDArray":
+                FUNC_TO_PATH[attr] = "numpy.ndarray." + k
+            elif cls_path in custom_np_class_names:
+                FUNC_TO_PATH[attr] = k
+            else:
+                FUNC_TO_PATH[attr] = ".".join(cls_path) + "." + k
 
+def _load_classes_from(ctw: List):
+    classes = []
+    for _ctw in ctw:
+        try:
+            classes.append(getattr(importlib.import_module(_ctw[0]), _ctw[1]))
+        except AttributeError:
+            classes.append(None)
+    return classes
 
 def _load_modules_from(mtw: List, add_path=None):
     modules = []
@@ -238,7 +260,24 @@ def _wrap_functions_for_dummy_tracing(
     glob.wrapped_fns = {}
     target = "ivy" if to_ivy else frontend if frontend else ivy.current_backend_str()
     wrap_all = True if _wrap_fn.__name__ == "remove_decorators" else False
-
+    private_class_paths = glob.PRIVATE_CLASSES_TO_WRAP(target)
+    private_classes = _load_classes_from(private_class_paths)
+    for cls, path in zip(private_classes, private_class_paths):
+        _wrap_or_unwrap_class(
+            _wrap_fn,
+            cls,
+            path,
+            to_ivy=to_ivy,
+        )
+    class_paths = glob.CLASSES_TO_WRAP[target]
+    classes = _load_classes_from(class_paths)
+    for cls, path in zip(classes, class_paths):
+        _wrap_or_unwrap_class(
+            _wrap_fn,
+            cls,
+            path,
+            to_ivy=to_ivy,
+        )
     if target == "tensorflow":
         import tensorflow as tf
 
@@ -248,8 +287,8 @@ def _wrap_functions_for_dummy_tracing(
             tf.compat.v2.compat.v1.linalg,
             tf.compat.v2.compat.v1.math,
         ]
-    # elif target == "ivy":
-    #     modules_to_wrap = [ivy.linalg]
+    elif target == "ivy":
+        modules_to_wrap = [ivy.linalg]
     else:
         modules_to_wrap = []
     modules_to_wrap += _load_modules_from(glob.MODULES_TO_WRAP[target], add_path=path)
@@ -268,6 +307,14 @@ def _wrap_functions_for_dummy_tracing(
     # with modules in jax.scipy because they are not initialised upon `import jax`,
     # and so will be initialised when we import them to wrap.
     if with_numpy:
+        for custom_class in custom_np_classes:
+            _wrap_or_unwrap_class(
+                _wrap_fn,
+                custom_class,
+                custom_class.__name__,
+                framework="numpy",
+                to_ivy=to_ivy,
+            )
         for module in _load_modules_from(glob.MODULES_TO_WRAP["numpy"], add_path=path):
             _wrap_or_unwrap_module(
                 _wrap_fn,
@@ -331,6 +378,12 @@ def _unwrap_functions_from_dummy_tracing(
 
     target = "ivy" if to_ivy else frontend if frontend else ivy.current_backend_str()
     if with_numpy:
+        for custom_class in custom_np_classes:
+            _wrap_or_unwrap_class(
+                _unwrap_fn,
+                custom_class,
+                framework="numpy",
+            )
         for module in _load_modules_from(glob.MODULES_TO_WRAP["numpy"], add_path=path):
             _wrap_or_unwrap_module(
                 _unwrap_fn,
@@ -360,6 +413,25 @@ def _unwrap_functions_from_dummy_tracing(
             module,
             to_ivy=to_ivy,
             wrap_or_unwrap_all=unwrap_all,
+        )
+    # unwrap backend classes
+    ctu = glob.CLASSES_TO_WRAP[target]
+    classes_to_unwrap = _load_classes_from(ctu) + stateful_classes
+    for cls in classes_to_unwrap:
+        _wrap_or_unwrap_class(
+            _unwrap_fn,
+            cls,
+            to_ivy=to_ivy,
+        )
+
+    # unwrap private classes
+    pctw = glob.PRIVATE_CLASSES_TO_WRAP(target)[::-1]
+    priv_classes_to_wrap = _load_classes_from(pctw)
+    for pctw in priv_classes_to_wrap:
+        _wrap_or_unwrap_class(
+            _unwrap_fn,
+            pctw,
+            to_ivy=to_ivy,
         )
 
     # unwrap functorch.vmap
@@ -1313,6 +1385,25 @@ def _dummy_tracing_func(orig_fn):
     call to this leaf function directly. Otherwise, just return the results of
     this function call, as this function is not being traced.
     """
+    is_already_wrapped = hasattr(orig_fn, "wrapped_for_tracing")
+
+    # do not wrap default __init__
+    if orig_fn is object.__init__:
+        return orig_fn
+
+    # Do not wrap the function:
+    # (a) if it's a special method but not in ARRAY_BUILTINS
+    # (b) if it's already wrapped
+    if (
+        (
+            hasattr(orig_fn, "__name__")
+            and (orig_fn.__name__[0] == "_" and orig_fn.__name__ not in glob.ARRAY_BUILTINS)
+        )
+        or is_already_wrapped
+        
+    ):
+        return orig_fn
+    
     if orig_fn.__name__ in ("if_else", "if_exp"):
         # Handle control flow ops
         @functools.wraps(orig_fn)
@@ -1422,22 +1513,17 @@ def _dummy_tracing_func(orig_fn):
             return ret
 
     else:
-
         @functools.wraps(orig_fn)
         def wrapped(*args, **kwargs):
-            def eval_args(*args):
-                results = []
-                for arg in args:
-                    try:
-                        arg_val = arg()
-                    except Exception:
-                        arg_val = None
-                    results.append(arg_val)
-                return tuple(results)
-
-            all_callable_args = [inspect.isfunction(a) for a in args]
-            if orig_fn.__name__ in cfe.transform_funcs and all(all_callable_args):
-                args = eval_args(*args)
+            
+            if _not_to_trace(orig_fn, *args, **kwargs):
+                return orig_fn(*args, **kwargs)
+            
+            if orig_fn.__name__[0:2] == "__" :
+                attr = orig_fn.__name__.strip('__')
+                if attr in glob.ALL_DUNDER_METHODS:
+                    # strip off the self argument
+                    args = args[1:] 
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
@@ -1773,19 +1859,13 @@ def symbolic_trace(
     """
 
     """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
-    if frontend is None:  # we will create IvyProxies
-        args = [ivy.array(arg) if ivy.is_array(arg) else arg for arg in args]
-        kwargs = {k: ivy.array(v) if ivy.is_array(v) else v for k, v in kwargs.items()}
-    else:
-        args = [ivy.native_array(arg) if ivy.is_array(arg) else arg for arg in args]
-        kwargs = {
-            k: ivy.native_array(v) if ivy.is_array(v) else v for k, v in kwargs.items()
-        }
+    args = ivy.nested_map(args, lambda a: ivy.native_array(a) if ivy.is_array(a) else a, shallow=False)
+    kwargs = ivy.nested_map(kwargs, lambda a: ivy.native_array(a) if ivy.is_array(a) else a, shallow=False)
     # wrap the native backend functions
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
         with_numpy=with_numpy,
-        _wrap_fn=lambda fn: _dummy_tracing_func(fn),
+        _wrap_fn= lambda fn: _dummy_tracing_func(fn),
         path=None,
     )
 
