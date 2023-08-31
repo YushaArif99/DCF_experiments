@@ -1800,7 +1800,7 @@ def symbolic_trace(
     generate_source: bool = False,
     control_flow: bool = False,
     debug_mode: bool = False,
-    stateful: Optional[List] = None,
+    stateful: Optional[List] = [],
     **kwargs,
 ) -> Graph:
     """
@@ -1966,9 +1966,9 @@ def symbolic_trace(
                 message="Error while converting the tracer graph to an ivy graph."
             )
         if generate_source:
-            glob.do_dummy_trace = True
+            glob.dummy_trace = True
             ivy_graph.reload_sourcecode()
-            glob.do_dummy_trace = False
+            glob.dummy_trace = False
 
     # unwrap backend functions
     _unwrap_functions_from_dummy_tracing(
