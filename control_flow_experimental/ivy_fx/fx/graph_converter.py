@@ -11,10 +11,13 @@ from graph_compiler.visualisation import _get_argument_reprs, _get_output_reprs
 from graph_compiler.wrapping import Node, Graph
 import graph_compiler.globals as glob
 import graph_compiler.tracked_var_proxy as tvp
-from graph_compiler.helpers import (
-    _get_unique_id,
-    _get_shape,
-    _clone_param,
+from graph_compiler.param import (
+    get_ids,
+    get_types,
+    get_shapes,
+    get_var_flags,
+    store_unique_id,
+    _get_unique_id
 )
 
 
@@ -22,9 +25,9 @@ class IvyNode(Node):
     from_tracked_var = False
     from_tracked_var_iterators = False
     from_iterator_chain = False
-    is_inplace_fw_fn = False
+    is_inplace_w_side_effects = False
     inplace_fn = False
-    prev_fn = None
+    prev_fn = False
     is_method = False
 
 
@@ -42,22 +45,19 @@ def _find_parameter_indexes(nest, tracked_var_idxs=[]):
             nest,
             lambda x: isinstance(x, Proxy_Node),
             check_nests=True,
-            to_ignore=tvp._to_ignore,
         )
         + tracked_var_idxs
     )
     return tracked_idxs
 
 
-def _record_parameters_info(args, tracked_var_idxs=[]):
-    indexes = _find_parameter_indexes(args, tracked_var_idxs)
+def _record_parameters_info(args, to_ivy, stateful_idxs=[]):
+    indexes = _find_parameter_indexes(args, stateful_idxs)
     parameters = ivy.multi_index_nest(args, indexes)
-    ids = [_get_unique_id(p) for p in parameters]
-    types = [p.__class__ for p in parameters]
-    var_flags = [
-        _is_variable(p, exclusive=True, to_ignore=tvp._to_ignore) for p in parameters
-    ]
-    shapes = [_get_shape(p) for p in parameters]
+    ids = get_ids(parameters, to_ivy)
+    types = get_types(parameters)
+    var_flags = get_var_flags(parameters)
+    shapes = get_shapes(parameters)
     iter_proxies = [
         _id
         for (_id, p) in zip(ids, parameters)
@@ -87,20 +87,27 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     the function extracts the input(s) and output(s) along with some
     other metadata and uses these to grow the Ivy Graph
     """
-    glob.logging_stack.append(fn)
+    glob.tracing_stack.append(fn)
 
     target_framework = "ivy" if to_ivy else ivy.current_backend_str()
 
     # check if there are slices with Proxy Nodes inside
     arg_tracked_slices_idxs = ivy.nested_argwhere(args, is_tracked_slice)
     kwarg_tracked_slices_idxs = ivy.nested_argwhere(kwargs, is_tracked_slice)
-    # convert slices to slice-lists
+    # (preprocessing): convert slices to slice-lists
     args = ivy.map_nest_at_indices(args, arg_tracked_slices_idxs, tvp.slice_to_list)
     kwargs = ivy.map_nest_at_indices(
         kwargs, kwarg_tracked_slices_idxs, tvp.slice_to_list
     )
 
+    ###################
+    #  node creation  #
+    ###################
+
+    # 1). create the node
     node = IvyNode()
+
+    # 2). populate arg ids and other meta data
     (
         node.arg_tracked_idxs,
         arg_parameters,
@@ -110,8 +117,9 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
         _,
         node.iter_proxies,
         _,
-    ) = _record_parameters_info(args, arg_stateful_idxs)
+    ) = _record_parameters_info(args, to_ivy=False, stateful_idxs=arg_stateful_idxs)
 
+    # 3). populate kwarg ids and other meta data
     (
         node.kwarg_tracked_idxs,
         _,
@@ -121,26 +129,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
         _,
         _,
         node.dict_proxies,
-    ) = _record_parameters_info(kwargs, kwarg_stateful_idxs)
-
-    # set the backend function
-    backend_fn = fn
-    # in the case where a method of a native class is called (eg: x.mean()), the fn logged will be the name
-    # of the function (i.e an str) and *not* the function itself. This is because we are working with Proxy inputs
-    # and hence dont know the class 'x' belongs to. Thus we create a placeholder function here to bypass any errors
-    # the tracing logic might throw.
-    if isinstance(fn, str):
-        backend_fn = lambda *_: None
-        backend_fn.__name__ = fn
-        node.is_method = True  # this attribute will later be used during source gen
-
-    input_parameter_ids = node.arg_param_ids + node.kwarg_param_ids
-
-    # convert slice-lists to slices
-    args = ivy.map_nest_at_indices(args, arg_tracked_slices_idxs, tvp.list_to_slice)
-    kwargs = ivy.map_nest_at_indices(
-        kwargs, kwarg_tracked_slices_idxs, tvp.list_to_slice
-    )
+    ) = _record_parameters_info(kwargs,to_ivy=False, stateful_idxs=kwarg_stateful_idxs)
 
     # convert return to list
     ret_listified = False
@@ -155,6 +144,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
         ret_list = [ret]
         ret_listified = True
 
+    # 4). populate output ids and other meta data
     (
         node.output_tracked_idxs,
         _,
@@ -164,15 +154,17 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
         node.output_param_shapes,
         _,
         _,
-    ) = _record_parameters_info(ret_list)
+    ) = _record_parameters_info(ret_list,to_ivy=False, stateful_idxs=[])
 
     # return if there are no tracked outputs
     if not node.output_tracked_idxs:
-        glob.logging_stack.pop()
+        glob.tracing_stack.pop()
         return ret_list[0] if ret_listified else tuple_type(ret_list)
 
+    # 5). handle duplicates
     # find all those outputs which have the same id as one of the inputs
     # we will have to clone those outputs to preserve uniqueness in the graph
+    input_parameter_ids = node.arg_param_ids + node.kwarg_param_ids
     duplicates = list()
     for i, ret_id in enumerate(node.output_param_ids):
         if ret_id in input_parameter_ids:
@@ -181,14 +173,56 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     # clone all repeated return parameters to give unique parameter ids in the graph
     duplicate_tracked_idxs = [node.output_tracked_idxs[i] for i in duplicates]
     ret_list = ivy.map_nest_at_indices(
-        ret_list, duplicate_tracked_idxs, lambda x: _clone_param(x, graph)
+        ret_list, duplicate_tracked_idxs, lambda x: store_unique_id(x, graph)
     )
 
     # get return param ids after cloning
     output_vals = ivy.multi_index_nest(ret_list, node.output_tracked_idxs)
     node.output_param_ids = [_get_unique_id(x) for x in output_vals]
 
-    # determine if the function is a numpy function
+    # 6). add the input(s) and output(s) ids to the dependent parameter dict
+    # find any dependent parameters and add it to the global dict
+    with_dependent_parameters = any(
+        [x in glob.dependent_ids for x in input_parameter_ids]
+    )
+    if with_dependent_parameters:
+        [glob.dependent_ids.add(id_) for id_ in node.output_param_ids]
+
+    # (post-processing):convert slice-lists back to slices
+    args = ivy.map_nest_at_indices(args, arg_tracked_slices_idxs, tvp.list_to_slice)
+    kwargs = ivy.map_nest_at_indices(
+        kwargs, kwarg_tracked_slices_idxs, tvp.list_to_slice
+    )
+
+    ###################################
+    #  handling additional attributes #
+    ###################################
+     
+    # set the backend function
+    backend_fn = fn
+    # in the case where a method of a native class is called (eg: x.mean()), the fn logged will be the name
+    # of the function (i.e an str) and *not* the function itself. This is because we are working with Proxy inputs
+    # and hence dont know the class 'x' belongs to. Thus we create a placeholder function here to bypass any errors
+    # the tracing logic might throw.
+    if isinstance(fn, str):
+        backend_fn = lambda *_: None
+        backend_fn.__name__ = fn
+        node.is_method = True  # this attribute will later be used during source gen
+
+    # 1). handle generators 
+    gen_fns = glob.GENERATOR_FUNCTIONS[target_framework]
+    if graph._with_numpy and target_framework != "numpy":
+        gen_fns = gen_fns + glob.GENERATOR_FUNCTIONS["numpy"]
+
+    node.is_generator = fn.__name__ in gen_fns
+    node.is_generator_to_include = (
+        node.is_generator and graph._include_generators
+    )
+    if node.is_generator_to_include or with_dependent_parameters:
+        [glob.dependent_ids.add(id_) for id_ in node.output_param_ids]
+
+    # 2). handle numpy functions
+    #determine if the function is a numpy function
     fn_is_numpy = False
     if graph._with_numpy:
         if hasattr(fn, "__qualname__"):
@@ -202,6 +236,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
             elif hasattr(fn, "__module__") and fn.__module__ is not None:
                 fn_is_numpy = "numpy" in fn.__module__ and "jax" not in fn.__module__
 
+    #3). handle inplace updates
     # added so tensorflow inplace variable updates work properly (return is set
     # to first arg since this is the variable updated inplace)
     # provide return value for __setattr__ and similar functions
@@ -219,13 +254,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     ):
         inplace_fn = True
 
-    # find any dependent parameters and add it to the global dict
-    with_dependent_parameters = any(
-        [x in glob.dependent_ids for x in input_parameter_ids]
-    )
-    if with_dependent_parameters:
-        [glob.dependent_ids.add(id_) for id_ in node.output_param_ids]
-    # store info about this node
+    # 4). store info about this node
     node.backend_fn = backend_fn
     try:
         sig = inspect.signature(backend_fn)
@@ -235,13 +264,12 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     node.arg_n_kwarg_reprs = _get_argument_reprs(sig_keys, args, kwargs)
     node.output = ret_list
     node.remove_output_tuple = (
-        isinstance(ret, tuple) and not isinstance(ret, tvp._to_ignore) and len(ret) == 1
+        isinstance(ret, tuple) and not isinstance(ret) and len(ret) == 1
     )
     node.output_reprs = _get_output_reprs(ret_list)
 
     node.timestamp = time.perf_counter()
     node.terminal = True
-    node.is_constant = len(input_parameter_ids) == 0
     node.with_tracked_slices = arg_tracked_slices_idxs + kwarg_tracked_slices_idxs
     node.inplace_fn = inplace_fn
     fns_in = [
@@ -302,7 +330,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
             graph.add_fn_to_dict(id_, node)
 
     # remove function from stack, now logging has occurred
-    glob.logging_stack.pop()
+    glob.tracing_stack.pop()
 
     # return the node
     return node
@@ -419,7 +447,7 @@ def _create_graph(
     var_kwargs=False,
     to_ivy=False,
     with_numpy=False,
-    stateful=None,
+    stateful=[],
 ):
     # dummy inputs to initialize the graph
     args = [ivy.native_array([]) for _ in graph_args]
@@ -432,22 +460,51 @@ def _create_graph(
     ivy_graph.var_kwargs = var_kwargs
 
     output_node = graph_outputs[0]
-
-    ivy_graph._arg_tracked_idxs = ivy.nested_argwhere(
-        graph_args, lambda x: isinstance(x, Proxy_Node)
+    #TODO(yusha): this is duplicate logic and should be removed eventually.
+    #  But it needs to be added for now because our Graph generates 
+    # ids based on native arrays. Wheras we need to generate them 
+    # based on Proxy Nodes.
+    (
+        ivy_graph._arg_tracked_idxs,
+        _,
+        ivy_graph._arg_param_ids,
+        ivy_graph._arg_param_types,
+        ivy_graph._arg_param_var_flags,
+        ivy_graph._arg_param_shapes,
+        _,
+        _,
+        ) = _record_parameters_info(
+            graph_kwargs, to_ivy=False, stateful_idxs=[]
+        )
+    
+    (
+        ivy_graph._kwarg_tracked_idxs,
+        _,
+        ivy_graph._kwarg_param_ids,
+        ivy_graph._kwarg_param_types,
+        ivy_graph._kwarg_param_var_flags,
+        ivy_graph._kwarg_param_shapes,
+        _,
+        _,
+        ) = _record_parameters_info(
+            graph_args, to_ivy=False, stateful_idxs=[]
+        )
+    
+    # add tracked inputs to graph
+    ids = ivy_graph._arg_param_ids + ivy_graph._kwarg_param_ids + ivy_graph._stateful_param_ids
+    types = ivy_graph._arg_param_types + ivy_graph._kwarg_param_types + ivy_graph._stateful_classes
+    var_flags = (
+        ivy_graph._arg_param_var_flags
+        + ivy_graph._kwarg_param_var_flags
+        + ivy_graph._stateful_param_var_flags
     )
-    ivy_graph._arg_param_ids = [
-        _get_unique_id(x)
-        for x in ivy.multi_index_nest(list(graph_args), ivy_graph._arg_tracked_idxs)
-    ]
-
-    ivy_graph._kwarg_tracked_idxs = ivy.nested_argwhere(
-        graph_kwargs, lambda x: isinstance(x, Proxy_Node)
+    shapes = (
+        ivy_graph._arg_param_shapes
+        + ivy_graph._kwarg_param_shapes
+        + ivy_graph._stateful_param_shapes
     )
-    ivy_graph._kwarg_param_ids = [
-        _get_unique_id(x)
-        for x in ivy.multi_index_nest(graph_kwargs, ivy_graph._kwarg_tracked_idxs)
-    ]
+    ivy_graph.add_parameters(ids, types, var_flags, shapes)
+    
     # initialize the dependent param id
     [
         glob.dependent_ids.add(id_)
@@ -472,7 +529,7 @@ def _create_graph(
     return ivy_graph
 
 
-def tracer_to_ivy_graph(tracer_graph, fn=None, stateful=None, to_ivy=False, with_numpy=False,):
+def tracer_to_ivy_graph(tracer_graph, fn=None, stateful=[], to_ivy=False, with_numpy=False,):
     graph_args, graph_functions, graph_outputs, graph_kwargs = [], [], [], {}
     var_args, var_kwargs = False, False
     for node in tracer_graph.nodes:
