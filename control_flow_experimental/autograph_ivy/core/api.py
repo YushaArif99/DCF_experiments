@@ -31,8 +31,6 @@ from control_flow_experimental.autograph_ivy.converters import return_statements
 from control_flow_experimental.autograph_ivy.converters import list_comprehensions
 from control_flow_experimental.autograph_ivy.converters import boolean_operators
 from control_flow_experimental.autograph_ivy.converters import builtins_type_casts
-from control_flow_experimental.autograph_ivy.converters import assigns
-from control_flow_experimental.autograph_ivy.converters import comparison
 from control_flow_experimental.autograph_ivy.converters import lists
 from control_flow_experimental.autograph_ivy.converters import slices
 import control_flow_experimental.autograph_ivy.core.list_ops as list_ops
@@ -109,11 +107,9 @@ class PyToIvy(transpiler.PyToPy):
         node = call_trees.transform(node, ctx)
         node = control_flow.transform(node, ctx)
         # node = conditional_expressions.transform(node, ctx)
-        # node = comparison.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
         node = boolean_operators.transform(node, ctx)
         node = builtins_type_casts.transform(node, ctx)
-        # node = assigns.transform(node, ctx)
         return node
 
 
