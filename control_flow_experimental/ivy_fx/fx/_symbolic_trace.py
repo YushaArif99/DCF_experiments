@@ -1758,6 +1758,8 @@ def wrap(fn_or_name: Union[str, Callable], dynamic: bool = False):
         fn_or_name (Union[str, Callable]): The function or name of the global function to insert into the
             graph when it's called
     """
+    if not glob.dummy_trace: # do not wrap if we're not doing symbolic tracing
+        return fn_or_name
     if not callable(fn_or_name) and not isinstance(fn_or_name, str):
         raise RuntimeError(
             "Unsupported type for global function! Must be either a callable or "

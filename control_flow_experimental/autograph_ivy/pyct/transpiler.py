@@ -119,7 +119,7 @@ def _wrap_into_factory(nodes, entity_name, inner_factory_name,
 
     # Create a list of nodes for the wrap function calls
     wrap_calls = []
-    for name in ['len', 'min', 'max', 'range', 'list']: # wrap builtins DONT wrap'list'
+    for name in ['len', 'min', 'max', 'range']: 
         template = """
             fx.wrap(name, dynamic=True)
         """
