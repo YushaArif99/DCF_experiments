@@ -1242,8 +1242,7 @@ class Tracer(TracerBase):
                 fn = root
 
             tracer_cls: Optional[Type["Tracer"]] = getattr(self, "__class__", None)
-            self.graph = Graph(tracer_cls=tracer_cls)
-
+            self.graph = Graph(tracer_cls=tracer_cls, root_fn=fn)
             # When we encounter a Tensor value that's not a parameter, we look if it
             # is some other attribute on the model. Construct a dict mapping Tensor
             # values to the qualified name here for efficiency. This is used downstream
@@ -1398,6 +1397,7 @@ def _dummy_tracing_func(orig_fn):
         (
             hasattr(orig_fn, "__name__")
             and (orig_fn.__name__[0] == "_" and orig_fn.__name__ not in glob.ARRAY_BUILTINS)
+            or (orig_fn.__name__ == "__getattribute__")
         )
         or is_already_wrapped
         

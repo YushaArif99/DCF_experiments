@@ -714,7 +714,8 @@ class Graph:
 
     @compatibility(is_backward_compatible=True)
     def __init__(self, owning_module: Optional["GraphModule"] = None, tracer_cls: Optional[Type["Tracer"]] = None,
-                 tracer_extras: Optional[Dict[str, Any]] = None):
+                 tracer_extras: Optional[Dict[str, Any]] = None, 
+                 root_fn=None):
         """
         Construct an empty Graph.
         """
@@ -727,6 +728,7 @@ class Graph:
         self._tracer_cls = tracer_cls
         self._tracer_extras = tracer_extras
         self._codegen = CodeGen()
+        self._fn = root_fn
 
     @property
     def owning_module(self):

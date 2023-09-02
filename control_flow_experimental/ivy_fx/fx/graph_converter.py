@@ -8,7 +8,7 @@ from .immutable_collections import Constant
 import ivy
 from ivy.functional.ivy.gradients import _is_variable
 from graph_compiler.visualisation import _get_argument_reprs, _get_output_reprs
-from graph_compiler.wrapping import Node, Graph
+from graph_compiler.wrapping import Node, Graph, FUNC_TO_PATH
 import graph_compiler.globals as glob
 import graph_compiler.tracked_var_proxy as tvp
 from graph_compiler.param import (
@@ -256,6 +256,8 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
 
     # 4). store info about this node
     node.backend_fn = backend_fn
+    if backend_fn in FUNC_TO_PATH:
+            node.path = FUNC_TO_PATH[backend_fn]
     try:
         sig = inspect.signature(backend_fn)
         sig_keys = list(sig.parameters.keys())
@@ -347,7 +349,7 @@ def _create_ivy_fn(node, to_ivy=False):
                 if callable(subg):
                     subgraphs.append(subg)
                 else:
-                    subgraphs.append(tracer_to_ivy_graph(subg))
+                    subgraphs.append(tracer_to_ivy_graph(subg, fn=subg._fn))
             node.args = ivy.nested_map(
                 node.args, lambda x: x.c if isinstance(x, Constant) else x
             )
@@ -474,7 +476,7 @@ def _create_graph(
         _,
         _,
         ) = _record_parameters_info(
-            graph_kwargs, to_ivy=False, stateful_idxs=[]
+            graph_args, to_ivy=False, stateful_idxs=[]
         )
     
     (
@@ -487,7 +489,7 @@ def _create_graph(
         _,
         _,
         ) = _record_parameters_info(
-            graph_args, to_ivy=False, stateful_idxs=[]
+            graph_kwargs, to_ivy=False, stateful_idxs=[]
         )
     
     # add tracked inputs to graph
