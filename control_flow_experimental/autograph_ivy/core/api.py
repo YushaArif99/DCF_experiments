@@ -45,6 +45,7 @@ from control_flow_experimental.autograph_ivy.pyct.static_analysis import activit
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import (
     reaching_definitions,
 )
+from control_flow_experimental.autograph_ivy.core import converter
 import control_flow_experimental as cfe
 import control_flow_experimental.ivy_fx.fx as fx
 from control_flow_experimental.ivy_fx.fx.proxy import Proxy
@@ -306,7 +307,10 @@ def _call_unconverted(f, args, kwargs):
 
 def to_functional_form(entity, program_ctx=None):
     """Applies autograph_ivy to entity."""
-
+    if program_ctx is None:
+            program_ctx = converter.ProgramContext(
+                options=converter.ConversionOptions(user_requested=True)
+        )
     if isinstance(entity, (BuiltinFunctionType, BuiltinMethodType)):
         return entity
 

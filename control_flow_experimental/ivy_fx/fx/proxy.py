@@ -735,9 +735,8 @@ for method in inplace_methods:
             return native_inp_method(*args, **kwargs)
 
         impl.__name__ = method
-        as_magic = f'__{method.strip("_")}__'
-        setattr(NativeProxy, as_magic, impl)
-
+        setattr(NativeProxy, method, impl)
+    method = f'__{method.strip("_")}__'
     _scope(method)
 
 FRONTEND_PROXIES = {
