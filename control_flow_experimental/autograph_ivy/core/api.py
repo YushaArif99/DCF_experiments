@@ -46,6 +46,7 @@ from control_flow_experimental.autograph_ivy.pyct.static_analysis import (
     reaching_definitions,
 )
 from control_flow_experimental.autograph_ivy.core import converter
+from control_flow_experimental.autograph_ivy.core import function_wrappers
 import control_flow_experimental as cfe
 import control_flow_experimental.ivy_fx.fx as fx
 from control_flow_experimental.ivy_fx.fx.proxy import Proxy
@@ -75,6 +76,8 @@ class PyToIvy(transpiler.PyToPy):
             ag_internal.__dict__.update(inspect.getmodule(PyToIvy).__dict__)
             ag_internal.__dict__.update(list_ops.__dict__) 
             ag_internal.__dict__.update(ast_transforms.__dict__)
+            ag_internal.__dict__.update(converter.__dict__)
+            ag_internal.__dict__.update(function_wrappers.__dict__)
             # TODO(mdan): Add safeguards against name clashes.
             self._extra_locals = {"ivy__": ag_internal, "ivy": ivy, "fx": fx, 'cfe':cfe}
         return self._extra_locals
