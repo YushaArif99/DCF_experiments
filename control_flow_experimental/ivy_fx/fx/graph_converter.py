@@ -372,7 +372,7 @@ def _create_ivy_fn(node, to_ivy=False):
                 if callable(subg):
                     subgraphs.append(subg)
                 else:
-                    subgraphs.append(tracer_to_ivy_graph(subg))
+                    subgraphs.append(tracer_to_ivy_graph(subg, fn=subg._fn))
             node.args = ivy.nested_map(
                 node.args, lambda x: x.c if isinstance(x, Constant) else x
             )
