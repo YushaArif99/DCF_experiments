@@ -34,11 +34,7 @@ from .node import Argument, base_types, map_aggregate
 from .proxy import Proxy, ParameterProxy, IvyProxy, TracerBase, Scope, ScopeContextManager
 from .graph_converter import tracer_to_ivy_graph
 from .func_wrappers import (
-    add_custom_decorator,
-    proxies_to_native_arrays,
-    native_arrays_to_proxies,
-    proxies_to_ivy_arrays,
-    ivy_arrays_to_proxies,
+    replace_decorators,
     convert_proxies_to_ivy_arrays
 )
 
@@ -997,6 +993,7 @@ class Tracer(TracerBase):
         is_module,
         constant_args=None,
         frontend=None,
+        to_ivy=False,
         *concr_args,
         **concr_kwargs,
     ):
@@ -1100,6 +1097,7 @@ class Tracer(TracerBase):
                 type_expr=fn_for_analysis.__annotations__.get(name, None),
                 data=proxy_data,
                 frontend=frontend,
+                to_ivy=to_ivy,
             )
 
         arg_names = [next(names_iter) for idx in range(skip_arg_idx, total_args)]
@@ -1198,6 +1196,7 @@ class Tracer(TracerBase):
         constant_args: Optional[Dict[str, Any]] = None,
         args=[],
         frontend=None,
+        to_ivy=False,
         **kwargs,
     ) -> Graph:
         """
@@ -1266,6 +1265,7 @@ class Tracer(TracerBase):
                 isinstance(root, torch.nn.Module),
                 constant_args,
                 frontend,
+                to_ivy,
                 *args,
                 **kwargs,
             )
@@ -1421,7 +1421,7 @@ def _dummy_tracing_func(orig_fn):
                     const_args[k] = v
 
             t = Tracer(name="pred_fn")
-            pred_g = t.trace(args[0], constant_args=const_args, args=[], **concr_args)
+            pred_g = t.trace(args[0], constant_args=const_args, frontend=proxy_inputs[0]._meta_frontend, to_ivy=proxy_inputs[0]._meta_to_ivy, args=[], **concr_args)
             pred = t.orig_ret
             try:
                 pred = pred[0] if isinstance(pred, (list, tuple)) else pred
@@ -1439,6 +1439,8 @@ def _dummy_tracing_func(orig_fn):
                         graph = t.trace(
                             arg,
                             constant_args=const_args,
+                            frontend=proxy_inputs[0]._meta_frontend,
+                            to_ivy=proxy_inputs[0]._meta_to_ivy,
                             args=[],
                             **concr_args,
                         )
@@ -1448,7 +1450,7 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1481,7 +1483,7 @@ def _dummy_tracing_func(orig_fn):
                     const_args[k] = v
 
             t = Tracer(name="test_fn")
-            test_g = t.trace(test_fn, constant_args=const_args, args=[], **concr_args)
+            test_g = t.trace(test_fn, constant_args=const_args, args=[], frontend=proxy_inputs[0]._meta_frontend, to_ivy=proxy_inputs[0]._meta_to_ivy, **concr_args)
             test = t.orig_ret
             try:
                 test = test[0] if isinstance(test, (list, tuple)) else test
@@ -1495,7 +1497,7 @@ def _dummy_tracing_func(orig_fn):
                 subgs = [test_g]
                 t = Tracer(name="body_fn")
                 graph = t.trace(
-                    body_fn, constant_args=const_args, args=[], **concr_args
+                    body_fn, constant_args=const_args, args=[], frontend=proxy_inputs[0]._meta_frontend, to_ivy=proxy_inputs[0]._meta_to_ivy, **concr_args
                 )
                 subgs.append(graph)
 
@@ -1503,7 +1505,7 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1527,8 +1529,20 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
+                if orig_fn.__name__ in glob.CREATION_FUNCS[ivy.current_backend_str()]:
+                    # creation functions (eg: asarray, eye, linspace) modify the input types
+                    # i.e (int/float/Sequence[ints] => NativeArray)
+                    # we therefore need to execute the orig_fn to get the new native array
+                    # which will be used to create the corresponding native proxy
+
+                    # get the concrete args/kwargs
+                    nargs, nkwargs = ivy.nested_map([args,kwargs], lambda a: a._meta_tensor if isinstance(a, Proxy) else a,shallow=False)
+                    data = orig_fn(*nargs, **nkwargs)
+                else:
+                    data = proxy._meta_tensor
+
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor,  frontend=proxy.frontend
+                    "call_function", orig_fn, args, kwargs, data=data, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return return_proxy
@@ -1553,7 +1567,7 @@ def _create_wrapped_method(cls, name):
         proxy = _find_proxy(args, kwargs)
         if proxy is not None:
             return proxy.tracer.create_proxy(
-                "call_method", name, args, kwargs, data=proxy._meta_tensor
+                "call_method", name, args, kwargs, data=proxy._meta_tensor, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
             )
         return orig_fn(*args, **kwargs)
 
@@ -1874,9 +1888,6 @@ def symbolic_trace(
     with _Patcher() as patcher:
         framework = ivy.current_backend_str()
         ivy_modules = _load_modules_from(glob.MODULES_TO_WRAP["ivy"], add_path=None)
-        backend_modules = _load_modules_from(
-            glob.MODULES_TO_WRAP[framework], add_path="backend"
-        )
         frontend_modules = (
             None
             if not frontend
@@ -1886,34 +1897,15 @@ def symbolic_trace(
         _patch_modules(
             patcher,
             ivy_modules,
-            lambda fn: add_custom_decorator(
-                [proxies_to_native_arrays, native_arrays_to_proxies],
-                fn,
-                positions=(0, -1),
-            ),
+            lambda fn: replace_decorators(fn),
             framework="ivy",
         )
-        # # custom wrap backend functions
-        # _patch_modules(
-        #     patcher,
-        #     backend_modules,
-        #     lambda fn: add_custom_decorator(
-        #         [proxies_to_native_arrays, native_arrays_to_proxies],
-        #         fn,
-        #         positions=(0, -1),
-        #     ),
-        #     framework=framework,
-        # )
         if frontend is not None:
             # custom wrap frontend functions
             _patch_modules(
                 patcher,
                 frontend_modules,
-                lambda fn: add_custom_decorator(
-                    [proxies_to_ivy_arrays, ivy_arrays_to_proxies],
-                    fn,
-                    positions=(0, -1),
-                ),
+                lambda fn: replace_decorators(fn, frontend=frontend),
                 framework=frontend,
             )
 
@@ -1945,12 +1937,13 @@ def symbolic_trace(
                     constant_args,
                     args=args,
                     frontend=frontend,
+                    to_ivy=to_ivy,
                     **kwargs,
                     **root.constants,
                 )
             else:
                 tracer_graph = tracer.trace(
-                    root, constant_args, args=args, frontend=frontend, **kwargs
+                    root, constant_args, args=args, frontend=frontend, to_ivy=to_ivy, **kwargs
                 )
         except SymTraceError:
             raise ivy.utils.exceptions.IvyException(
