@@ -133,12 +133,17 @@ def _unwrap_function_from_dummy_tracing(function_wrapped):
         return function_wrapped.__wrapped__
     return function_wrapped
 
+def is_unsupported_module(mod):
+    if mod is None:
+        return False
+    return any(x in mod.split('.') for x in ['utils', 'typing'])
 
 def _should_be_wrapped(obj):
     return (
         callable(obj)
         and not inspect.isclass(obj)
-        and not (hasattr(obj, "__module__") and obj.__module__ == "typing")
+        and not (hasattr(obj, "__module__") and is_unsupported_module(obj.__module__)
+)
     )
 
 def _not_to_trace(orig_fn, *args, **kwargs):
