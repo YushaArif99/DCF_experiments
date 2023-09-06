@@ -171,7 +171,15 @@ def args_to_native(
     return native_args, native_kwargs
 
 
+def is_ivy_array(
+    x: Union[IvyProxy, NativeProxy], /, *, exclusive: Optional[bool] = False
+) -> bool:
+    return isinstance(x, IvyProxy) or is_ivy_array._orig_fn(x, exclusive=exclusive)
 
+def is_native_array(
+    x: Union[IvyProxy, NativeProxy], /, *, exclusive: bool = False
+) -> bool:
+    return isinstance(x, NativeProxy) or is_native_array._orig_fn(x, exclusive=exclusive)
 
 
 

@@ -131,6 +131,7 @@ def replace_decorators(func, frontend=None):
 def get_replacement_func(func):
    try:
     new_fn = ALL_FUNCS[func.__name__]
+    new_fn._orig_fn = func # store the original function as it might be used in the proxy-implementation
    except KeyError:
     raise KeyError(f"No replacement function found for {func.__name__}")
    
