@@ -35,6 +35,7 @@ from .proxy import Proxy, ParameterProxy, IvyProxy, TracerBase, Scope, ScopeCont
 from .graph_converter import tracer_to_ivy_graph
 from .func_wrappers import (
     replace_decorators,
+    get_replacement_func,
     convert_proxies_to_ivy_arrays
 )
 
@@ -1691,13 +1692,12 @@ def _patch_modules(
                 or name[0] == "_"
             ):
                 continue
+            elif name in glob.IVY_CONVERSION_FUNCS:
+                #replace these functions with a proxy-friendly implementation
+                patcher.patch_method(module, name, get_replacement_func(orig_func))
             elif name in glob.IVY_FUNCTIONS_NOT_TO_TRACK:
-                if orig_func.__class__.__name__ == "ufunc":
-                    patcher.patch_method(
-                        module, name, convert_proxies_to_ivy_arrays(orig_func.func)
-                    )
-                else:
-                    patcher.patch_method(module, name, convert_proxies_to_ivy_arrays(orig_func))
+                # these functions only work with ivy.Arrays/ivy.NativeArrays
+                patcher.patch_method(module, name, convert_proxies_to_ivy_arrays(orig_func))
             else:
                 if orig_func.__class__.__name__ == "ufunc":
                     patcher.patch_method(module, name, wrap_fn(orig_func.func))

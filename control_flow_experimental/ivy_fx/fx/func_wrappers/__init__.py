@@ -13,6 +13,7 @@ from .torch_helpers import (
     inputs_to_ivy_proxies_torch,
     outputs_to_frontend_proxies_torch,
 )
+from .replacement_funcs import ALL_FUNCS 
 
 import ivy
 from ivy.func_wrapper import FN_DECORATORS
@@ -126,3 +127,11 @@ def replace_decorators(func, frontend=None):
         setattr(func, new_key, value)
 
     return func
+
+def get_replacement_func(func):
+   try:
+    new_fn = ALL_FUNCS[func.__name__]
+   except KeyError:
+    raise KeyError(f"No replacement function found for {func.__name__}")
+   
+   return new_fn
