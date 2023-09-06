@@ -14,26 +14,36 @@ import platform
 
 
 def _numpy_frontend_to_ivy(x: Any) -> Any:
-    if hasattr(x, "ivy_array"):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x.ivy_array)
+    if hasattr(x, "ivy_proxy"):
+        return x.ivy_proxy 
     else:
         return x
 
 
 def _ivy_to_numpy(x: Any) -> Any:
-    if isinstance(x, (IvyProxy, NativeProxy)):
+    if isinstance(x, IvyProxy):
         return Numpy_FrontendProxy(
-            node=x.node, tracer=x.tracer, shape=x, _init_overload=True
+            node=x.node, tracer=x.tracer, shape=x, ivy_proxy=x, _init_overload=True
         )
+    elif isinstance(x, NativeProxy):
+        ivy_proxy = IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+        return Numpy_FrontendProxy(node=x.node, tracer=x.tracer, shape=x, ivy_proxy=ivy_proxy, _init_overload=True)
     else:
         return x
 
 
 def _ivy_to_numpy_order_F(x: Any) -> Any:
-    if isinstance(x, (IvyProxy, NativeProxy)):
+    if isinstance(x, IvyProxy):
         a = Numpy_FrontendProxy(
-            node=x.node, tracer=x.tracer, shape=0, order="F"
+            node=x.node, tracer=x.tracer, shape=0, ivy_proxy=x, order="F"
         )  # TODO Find better initialisation workaround
+        a.ivy_array = x
+        return a
+    elif isinstance(x, NativeProxy):
+        ivy_proxy = IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+        a = Numpy_FrontendProxy(
+            node=x.node, tracer=x.tracer, shape=0, ivy_proxy=ivy_proxy, order="F"
+        )  
         a.ivy_array = x
         return a
     else:

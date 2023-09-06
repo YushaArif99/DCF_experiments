@@ -16,12 +16,12 @@ import functools
 def _from_jax_frontend_proxy_to_ivy_proxy(x):
     if isinstance(x, JAX_FrontendProxy) and x.weak_type and x.ivy_array.shape == ():
         setattr(x.ivy_array, "weak_type", True)
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x.ivy_array)
-    if hasattr(x, "ivy_array"):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x.ivy_array)
+        return x.ivy_proxy 
+    if hasattr(x, "ivy_proxy"):
+        return x.ivy_proxy 
 
     if isinstance(x, NativeProxy):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data)
+        return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
     return x
 
 
@@ -31,7 +31,7 @@ def _from_ivy_proxy_to_jax_frontend_proxy(x, nested=False, include_derived=None)
             x, _from_ivy_proxy_to_jax_frontend_proxy, include_derived, shallow=False
         )
     elif isinstance(x, IvyProxy):
-        return JAX_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data)
+        return JAX_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data, ivy_proxy=x)
     return x
 
 
@@ -47,7 +47,7 @@ def _from_ivy_proxy_to_jax_frontend_proxy_weak_type(
         )
     elif isinstance(x, IvyProxy):
         return JAX_FrontendProxy(
-            node=x.node, tracer=x.tracer, data=x._ivy_data, weak_type=True
+            node=x.node, tracer=x.tracer, data=x._ivy_data, ivy_proxy=x, weak_type=True
         )
     return x
 

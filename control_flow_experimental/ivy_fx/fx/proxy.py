@@ -167,13 +167,21 @@ class TracerBase:
         frontend: str = None,
         to_ivy=False,
     ) -> "Proxy":
+        # FP -> IP -> NP ; where
+        # FP : FrontendProxy 
+        # IP : IvyProxy 
+        # NP : NativeProxy 
+        # -> : contains 
         if ivy.isscalar(data) or data is None:
             return Proxy(node,self, data=data, frontend=None, to_ivy=False)
-        elif frontend:
+        elif frontend: 
+            native_proxy = NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
+            ivy_proxy = IvyProxy(node, self, data=data, native_proxy=native_proxy, frontend=None, to_ivy=True)
             frontend_proxy = FRONTEND_PROXIES[frontend]
-            return frontend_proxy(node, self, data=data, frontend=frontend, to_ivy=False)
+            return frontend_proxy(node, self, data=data, ivy_proxy=ivy_proxy, frontend=frontend, to_ivy=False)
         elif to_ivy:
-            return IvyProxy(node, self, data=data, frontend=None, to_ivy=True)
+            native_proxy = NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
+            return IvyProxy(node, self, data=data, native_proxy=native_proxy, frontend=None, to_ivy=True)
         else: 
             return NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
 
@@ -488,10 +496,11 @@ class IvyProxy(ivy.Array, Proxy):
     so that conditional tests on these attributes will not throw exception during tracing
     """
 
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, native_proxy=None, frontend=None, to_ivy=False):
         super(IvyProxy, self).__init__(data) 
         Proxy.__init__(self, node, tracer, data, frontend,to_ivy)
         self._ivy_data = data
+        self.native_proxy = native_proxy
 
     def __repr__(self):
         return f"IvyProxy({self.node.name})"
@@ -525,10 +534,11 @@ class Torch_FrontendProxy(Tensor, Proxy):
     so that conditional tests on these attributes will not throw exception during tracing
     """
 
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
-        super(Torch_FrontendProxy, self).__init__(data)
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, ivy_proxy=None, frontend=None, to_ivy=False, **kwargs):
+        super(Torch_FrontendProxy, self).__init__(array=data, **kwargs)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
         self.frontend = 'torch'
+        self.ivy_proxy = ivy_proxy
 
     def __repr__(self):
         return f"Torch_FrontendProxy({self.node.name})"
@@ -542,10 +552,11 @@ class JAX_FrontendProxy(DeviceArray, Proxy):
     so that conditional tests on these attributes will not throw exception during tracing
     """
 
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
-        super(JAX_FrontendProxy, self).__init__(data)
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None,ivy_proxy=None, frontend=None, to_ivy=False, **kwargs):
+        super(JAX_FrontendProxy, self).__init__(array=data, **kwargs)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
         self.frontend = 'jax'
+        self.ivy_array = ivy_proxy
 
     def __repr__(self):
         return f"JAX_FrontendProxy({self.node.name})"
@@ -559,10 +570,11 @@ class TF_FrontendProxy(EagerTensor, Proxy):
     so that conditional tests on these attributes will not throw exception during tracing
     """
 
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
-        super(TF_FrontendProxy, self).__init__(data)
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, ivy_proxy=None, frontend=None, to_ivy=False):
+        super(TF_FrontendProxy, self).__init__(array=data)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
         self.frontend = 'tensorflow'
+        self.ivy_proxy= ivy_proxy
 
     def __repr__(self):
         return f"TF_FrontendProxy({self.node.name})"
@@ -576,11 +588,11 @@ class Numpy_FrontendProxy(ndarray, Proxy):
     so that conditional tests on these attributes will not throw exception during tracing
     """
 
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, dtype="float32", frontend=None, to_ivy=False):
-        super(Numpy_FrontendProxy, self).__init__(shape=shape, dtype=dtype)
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, dtype="float32", ivy_proxy=None,frontend=None, to_ivy=False, **kwargs):
+        super(Numpy_FrontendProxy, self).__init__(shape=shape, dtype=dtype, **kwargs)
         Proxy.__init__(self, node, tracer, self.ivy_array, frontend, to_ivy)
         self.frontend = 'numpy'
-
+        self.ivy_proxy = ivy_proxy
     def __repr__(self):
         return f"Numpy_FrontendProxy({self.node.name})"
 

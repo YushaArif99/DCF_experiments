@@ -21,22 +21,23 @@ def _from_ivy_proxies_to_torch_frontend_proxies(
             shallow=False,
         )
     elif isinstance(x, IvyProxy):
-        a = Torch_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data)
+        a = Torch_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data, ivy_proxy=x)
         return a
     elif isinstance(x, NativeProxy):
-        a = Torch_FrontendProxy(node=x.node, tracer=x.tracer, data=x._native_data)
+        ivy_proxy = IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+        a = Torch_FrontendProxy(node=x.node, tracer=x.tracer, data=x._native_data, ivy_proxy=ivy_proxy)
         return a
     return x
 
 
 def _to_ivy_proxy(x):
-    # if x is a native array return it as an ivy array
+    # if x is a native proxy return it as an ivy proxy
     if isinstance(x, NativeProxy):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data)
+        return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
 
     # else if x is a frontend proxy, return the wrapped ivy proxy # noqa: E501
-    elif hasattr(x, "ivy_array"):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x.ivy_array)
+    elif hasattr(x, "ivy_proxy"):
+        return x.ivy_proxy
 
     # else just return x
     return x

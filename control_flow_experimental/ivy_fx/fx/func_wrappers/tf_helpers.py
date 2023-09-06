@@ -12,16 +12,17 @@ import functools
 
 
 def _tf_frontend_proxy_to_ivy(x):
-    if hasattr(x, "ivy_array"):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x.ivy_array)
+    if hasattr(x, "ivy_proxy"):
+        return x.ivy_proxy
     return x
 
 
 def _ivy_proxy_to_tensorflow(x):
     if isinstance(x, IvyProxy):
-        return TF_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data)
+        return TF_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data, ivy_proxy=x)
     elif isinstance(x, NativeProxy):
-        return TF_FrontendProxy(node=x.node, tracer=x.tracer, data=x._native_data)
+        ivy_proxy = IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+        return TF_FrontendProxy(node=x.node, tracer=x.tracer, data=x._native_data, ivy_proxy=ivy_proxy)
     return x
 
 

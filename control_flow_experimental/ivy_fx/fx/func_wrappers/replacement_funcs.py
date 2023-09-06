@@ -12,7 +12,7 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
     if isinstance(x, to_ignore):
         return x
     if isinstance(x, IvyProxy):
-        return NativeProxy(node=x.node, tracer=x.tracer, native_data=x.data)
+        return x.native_proxy
     # TODO: add support for ShapeProxies
     elif type(x) is ivy.Shape:
         return x.shape
@@ -32,7 +32,7 @@ def _to_ivy(x: Any) -> Any:
     elif isinstance(x, ivy.Container):
         return x.to_ivy()
     if isinstance(x, NativeProxy):
-        return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data)
+        return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
     return x
 
 
