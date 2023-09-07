@@ -36,8 +36,8 @@ def _to_ivy_proxy(x):
         return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
 
     # else if x is a frontend proxy, return the wrapped ivy proxy # noqa: E501
-    elif hasattr(x, "ivy_proxy"):
-        return x.ivy_proxy
+    elif hasattr(x, "ivy_array"):
+        return x.ivy_array
 
     # else just return x
     return x

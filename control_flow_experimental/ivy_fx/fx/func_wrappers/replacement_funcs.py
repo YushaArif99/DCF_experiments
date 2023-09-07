@@ -12,7 +12,9 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
     if isinstance(x, to_ignore):
         return x
     if isinstance(x, IvyProxy):
-        return x.native_proxy
+        return x.data
+    elif hasattr(x, "ivy_array") and isinstance(x.ivy_array, IvyProxy):
+        return x.ivy_array.data
     # TODO: add support for ShapeProxies
     elif type(x) is ivy.Shape:
         return x.shape

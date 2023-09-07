@@ -13,7 +13,7 @@ from .torch_helpers import (
     inputs_to_ivy_proxies_torch,
     outputs_to_frontend_proxies_torch,
 )
-from .replacement_funcs import ALL_FUNCS 
+from .replacement_funcs import ALL_FUNCS, to_native
 
 import ivy
 from ivy.func_wrapper import FN_DECORATORS
@@ -25,7 +25,7 @@ import sys
 #  CUSTOM WRAPPING  #
 #####################
 
-replacement_dict = {
+backend_replacement_dict = {
     "inputs_to_ivy_arrays": inputs_to_ivy_proxies,
     "inputs_to_native_arrays": inputs_to_native_proxies,
     "outputs_to_ivy_arrays": outputs_to_ivy_proxies,
@@ -33,10 +33,22 @@ replacement_dict = {
 }
 
 frontend_replacement_dict = {
-    "torch": [inputs_to_ivy_proxies_torch, outputs_to_frontend_proxies_torch],
-    "numpy": [inputs_to_ivy_proxies_np, outputs_to_frontend_proxies_np],
-    "tensorflow": [inputs_to_ivy_proxies_tf, outputs_to_frontend_proxies_tf],
-    "jax": [inputs_to_ivy_proxies_jax, outputs_to_frontend_proxies_jax],
+    "torch": {
+        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_torch,
+        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_torch
+        },
+    "numpy": {
+        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_np,
+        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_np
+        },
+    "tensorflow": {
+        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_tf,
+        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_tf
+        },
+    "jax": {
+        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_jax,
+        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_jax
+        },
 }
 
 dtype_device_dict = {
@@ -62,6 +74,7 @@ def replace_decorators(func, frontend=None):
     :param func: The function to replace the decorators of.
     """
     actual_decorators = []
+    replacement_dict = frontend_replacement_dict[frontend] if frontend else  backend_replacement_dict
     if func.__name__ == "asarray":
         # asarray contains asarray-specific decorators
         # so we will handle it seperately
@@ -72,6 +85,7 @@ def replace_decorators(func, frontend=None):
             + list(dtype_device_dict.keys())
             + [
                 "handle_numpy_arrays_in_specific_backend",
+                "outputs_to_frontend_arrays",
             ]
         ):
             if hasattr(func, decorator):
@@ -109,9 +123,6 @@ def replace_decorators(func, frontend=None):
                     )
 
                 actual_decorators.append(decorator_func)
-    if frontend:
-        actual_decorators.extend(frontend_replacement_dict[frontend])
-
     # re-apply the decorators back to the function in reverse order
     original_func_dict = func.__dict__
     func = inspect.unwrap(func)
