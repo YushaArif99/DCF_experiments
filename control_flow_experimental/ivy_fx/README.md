@@ -26,18 +26,17 @@ def foo(x,y, z=None,):
     res = torch.sin(x) + torch.cos(y)
     if z is not None: 
         res += torch.tan(z) 
-    return res + [1,2,3]
+    return res 
 
 glob.do_dummy_trace = True
 ivy.set_backend('torch') 
 x = ivy.array([1,2,3])
 y = ivy.array([4,5,6])
-z = ivy.array([7,8,9])
 
-torch_tracer_g, torch_ivy_g = fx.symbolic_trace(foo, args=(x,y,z))
+torch_tracer_g, torch_ivy_g = fx.symbolic_trace(foo, args=(x,y,None), control_flow=True) #torch graph
 torch_ivy_g.reload_sourcecode(frontend='torch')
 ivy.set_backend('jax', dynamic=True)
-jax_tracer_g, jax_ivy_g = fx.symbolic_trace(torch_ivy_g, args=(x,y,z), frontend='torch', generate_source=True) 
+jax_tracer_g, jax_ivy_g = fx.symbolic_trace(torch_ivy_g, args=(x,y,None), frontend='torch', generate_source=True, control_flow=True) # jax graph
 ```
 
 The `foo` function above takes in two required arguments, `x` and `y`, and an optional argument `z`. The function calculates the sum of the sine of `x` and the cosine of `y`. It uses a conditional to check if the optional argument `z` is provided, and if so, the function also adds the tangent of `z` to the result. 
@@ -48,50 +47,62 @@ import jaxlib
 
 def compiled_fn(*args, **kwargs):
 
-    def pred_fn_139912365430080(*args, **kwargs):
-        p139912365438816 = args[0]
-        p139912365433152 = args[1]
-        p139912365428976 = (p139912365433152 is not None)
-        del p139912365433152
-        p139912365433104 = bool(p139912365428976)
-        del p139912365428976
-        return bool(p139912365433104)
+    def pred_fn_140020324165296(*args, **kwargs):
+        add = args[0]
+        z = args[1]
+        _cmp_isnot = (z is not None)
+        del z
+        _cast_to_bool = bool(_cmp_isnot)
+        del _cmp_isnot
+        return bool(_cast_to_bool)
 
-    def true_fn_139912365430080(*args, **kwargs):
-        p139912365439152 = args[0]
-        p139912365425760 = args[1]
-        p139912365427632 = jax.numpy.tan(p139912365425760)
-        p2079781071015729316 = p139912365425760
-        del p139912365425760
-        p139912365439872 = p139912365439152 + p139912365427632
-        del p139912365439152, p139912365427632
-        return p139912365439872, p2079781071015729316
+    def true_fn_140020324165296(*args, **kwargs):
+        add = args[0]
+        z = args[1]
+        asarray_4 = jax.numpy.asarray(add, dtype='float32')
+        del add
+        tan = jax.numpy.tan(z)
+        _input_to_output = z
+        del z
+        asarray_5 = jax.numpy.asarray(tan, dtype='float32')
+        del tan
+        add_1 = jax.numpy.add(asarray_4, asarray_5)
+        del asarray_4, asarray_5
+        copy = jax.numpy.copy(add_1)
+        del add_1
+        return copy, _input_to_output
 
-    def false_fn_139912365430080(*args, **kwargs):
-        p139912365437040 = args[0]
-        p139912365431328 = args[1]
-        p1264514798712448798 = p139912365437040
-        del p139912365437040
-        p6795413016519425161 = p139912365431328
-        del p139912365431328
-        return p1264514798712448798, p6795413016519425161
-    p139912367216560 = args[0]
-    p139912367216704 = args[1]
-    p139912365428256 = args[2]
-    c139912365725632 = kwargs['c139912365725632']
-    p139912365426096 = jax.numpy.sin(p139912367216560)
-    del p139912367216560
-    p139912365437712 = jax.numpy.cos(p139912367216704)
-    del p139912367216704
-    p139912365428928 = p139912365426096 + p139912365437712
-    del p139912365426096, p139912365437712
-    with jax.disable_jit(): p139912365431472 = jax.lax.cond(lambda p139912365428928, p139912365428256: pred_fn_139912365430080(p139912365428928, p139912365428256),lambda p139912365428928, p139912365428256: true_fn_139912365430080(p139912365428928, p139912365428256), lambda p139912365428928, p139912365428256: false_fn_139912365430080(p139912365428928, p139912365428256), p139912365428928, p139912365428256)
+    def false_fn_140020324165296(*args, **kwargs):
+        add = args[0]
+        z = args[1]
+        _input_to_output_1 = add
+        del add
+        _input_to_output_2 = z
+        del z
+        return _input_to_output_1, _input_to_output_2
+    input_0 = args[0]
+    input_1 = args[1]
+    input_2 = args[2]
+    c140022365845600 = kwargs['c140022365845600']
+    asarray = jax.numpy.asarray(input_0, dtype=c140022365845600)
+    del input_0
+    asarray_1 = jax.numpy.asarray(input_1, dtype=c140022365845600)
+    del input_1
+    sin = jax.numpy.sin(asarray)
+    del asarray
+    cos = jax.numpy.cos(asarray_1)
+    del asarray_1
+    asarray_2 = jax.numpy.asarray(sin, dtype='float32')
+    del sin
+    asarray_3 = jax.numpy.asarray(cos, dtype='float32')
+    del cos
+    add = jax.numpy.add(asarray_2, asarray_3)
+    del asarray_2, asarray_3
+    with jax.disable_jit(): cond = jax.lax.cond(pred_fn_140020324165296(add, input_2),lambda add, input_2: true_fn_140020324165296(add, input_2), lambda add, input_2: false_fn_140020324165296(add, input_2), add, input_2)
 
-    p139912365427920 = p139912365431472[0]
-    del p139912365431472
-    p139912365429888 = p139912365427920 + c139912365725632
-    del p139912365427920
-    return p139912365429888
+    getitem = cond.__getitem__(0)
+    del cond
+    return getitem
 ```
 
 # Internal Structure
