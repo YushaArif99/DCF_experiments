@@ -36,7 +36,8 @@ from .graph_converter import tracer_to_ivy_graph
 from .func_wrappers import (
     replace_decorators,
     get_replacement_func,
-    convert_proxies_to_ivy_arrays
+    convert_proxies_to_ivy_arrays,
+    to_native
 )
 
 import graph_compiler.globals as glob
@@ -135,6 +136,8 @@ def _unwrap_function_from_dummy_tracing(function_wrapped):
 
 def is_unsupported_module(mod):
     if mod is None:
+        return False
+    if "assertions" in mod:
         return False
     return any(x in mod.split('.') for x in ['utils', 'typing'])
 
@@ -1316,7 +1319,7 @@ class Tracer(TracerBase):
                     _autowrap_check(
                         patcher, module.__dict__, self._autowrap_function_ids
                     )
-                orig_ret = fn(*args)
+                orig_ret = to_native(fn(*args), nested=True)
                 self.orig_ret = orig_ret
                 self.create_node(
                     "output",
@@ -1383,7 +1386,7 @@ def _py_whileloop(test_fn, body_fn, body_vars):
     return body_vars
 
 
-def _dummy_tracing_func(orig_fn):
+def _dummy_tracing_func(orig_fn, to_ivy=False):
     """
     Given an closed-over ``orig_function`` to invoke, search the args and kwargs for
     a Proxy object. If there is one, emit a ``call_function`` node to preserve the
@@ -1422,12 +1425,16 @@ def _dummy_tracing_func(orig_fn):
             for k, v in cond_vars.items():
                 if isinstance(v, Proxy):
                     proxy_inputs.append(v)
-                    concr_args[k] = v.data
+                    concr_args[k] = v._meta_tensor
                 else:
                     const_args[k] = v
 
             t = Tracer(name="pred_fn")
-            pred_g = t.trace(args[0], constant_args=const_args, frontend=proxy_inputs[0]._meta_frontend, to_ivy=proxy_inputs[0]._meta_to_ivy, args=[], **concr_args)
+            if ivy.nested_any(proxy_inputs, lambda x: hasattr(x,"ivy_array")):
+                frontend = proxy_inputs[0].frontend
+            else:
+                frontend = None
+            pred_g = t.trace(args[0], constant_args=const_args, to_ivy=to_ivy, frontend=frontend, args=[], **concr_args)
             pred = t.orig_ret
             try:
                 pred = pred[0] if isinstance(pred, (list, tuple)) else pred
@@ -1445,8 +1452,8 @@ def _dummy_tracing_func(orig_fn):
                         graph = t.trace(
                             arg,
                             constant_args=const_args,
-                            frontend=proxy_inputs[0]._meta_frontend,
-                            to_ivy=proxy_inputs[0]._meta_to_ivy,
+                            to_ivy= to_ivy,
+                            frontend=frontend,
                             args=[],
                             **concr_args,
                         )
@@ -1456,7 +1463,7 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor,to_ivy=to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1489,7 +1496,11 @@ def _dummy_tracing_func(orig_fn):
                     const_args[k] = v
 
             t = Tracer(name="test_fn")
-            test_g = t.trace(test_fn, constant_args=const_args, args=[], frontend=proxy_inputs[0]._meta_frontend, to_ivy=proxy_inputs[0]._meta_to_ivy, **concr_args)
+            if ivy.nested_any(proxy_inputs, lambda x: hasattr(x,"ivy_array")):
+                frontend = proxy_inputs[0].frontend
+            else:
+                frontend = None
+            test_g = t.trace(test_fn, constant_args=const_args, args=[], to_ivy=to_ivy, frontend=frontend, **concr_args)
             test = t.orig_ret
             try:
                 test = test[0] if isinstance(test, (list, tuple)) else test
@@ -1503,7 +1514,7 @@ def _dummy_tracing_func(orig_fn):
                 subgs = [test_g]
                 t = Tracer(name="body_fn")
                 graph = t.trace(
-                    body_fn, constant_args=const_args, args=[], frontend=proxy_inputs[0]._meta_frontend, to_ivy=proxy_inputs[0]._meta_to_ivy, **concr_args
+                    body_fn, constant_args=const_args, args=[], to_ivy=to_ivy, frontend=frontend, **concr_args
                 )
                 subgs.append(graph)
 
@@ -1511,7 +1522,7 @@ def _dummy_tracing_func(orig_fn):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
+                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor, to_ivy=to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1527,11 +1538,6 @@ def _dummy_tracing_func(orig_fn):
             if _not_to_trace(orig_fn, *args, **kwargs):
                 return orig_fn(*args, **kwargs)
             
-            if orig_fn.__name__[0:2] == "__" :
-                attr = orig_fn.__name__.strip('__')
-                if attr in glob.ALL_DUNDER_METHODS:
-                    # strip off the self argument
-                    args = args[1:] 
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
@@ -1548,7 +1554,7 @@ def _dummy_tracing_func(orig_fn):
                     data = proxy._meta_tensor
 
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=data, frontend=proxy._meta_frontend, to_ivy=proxy._meta_to_ivy
+                    "call_function", orig_fn, args, kwargs, data=data, to_ivy=to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return return_proxy
@@ -1886,7 +1892,7 @@ def symbolic_trace(
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
         with_numpy=with_numpy,
-        _wrap_fn= lambda fn: _dummy_tracing_func(fn),
+        _wrap_fn= lambda fn: _dummy_tracing_func(fn, to_ivy=to_ivy),
         path=None,
     )
 
@@ -1905,6 +1911,16 @@ def symbolic_trace(
             lambda fn: replace_decorators(fn),
             framework="ivy",
         )
+        # disable ivy assertion helper functions. This is
+        # because during symbolic tracing, we dont care about
+        # assertion checks. They are meant to be used only when 
+        # doing actual computation, not when tracing.
+        _patch_modules(
+            patcher,
+            [ivy.functional.ivy.utils.assertions],
+            lambda fn: lambda *args, **kwargs: None,
+            framework="ivy",
+        )
         if frontend is not None:
             # custom wrap frontend functions
             _patch_modules(
@@ -1916,11 +1932,11 @@ def symbolic_trace(
 
         # explicitly wrap ivy control flow ops since we wont trace into tf.cond/jax.lax.cond etc.
         for f in [ivy.if_else, ivy.if_exp, ivy.for_loop, ivy.while_loop]:
-            patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f))
+            patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f, to_ivy=to_ivy))
 
         # explicitly wrap all ast transform functions
         for name, f in cfe.transform_funcs.items():
-            patcher.patch_method(cfe, name, _dummy_tracing_func(f))
+            patcher.patch_method(cfe, name, _dummy_tracing_func(f,to_ivy=to_ivy))
 
         # transform the root function if control_flow = True 
         if control_flow:
@@ -1979,7 +1995,6 @@ def symbolic_trace(
     )
 
     return tracer_graph, ivy_graph
-
 
 # ----------------------------------------
 # AST Transformed iterator/boolean helpers
