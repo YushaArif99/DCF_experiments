@@ -172,9 +172,12 @@ class TracerBase:
         # IP : IvyProxy 
         # NP : NativeProxy 
         # -> : contains 
-        if ivy.isscalar(data) or data is None:
+        if ivy.isscalar(data):
             return Proxy(node,self, data=data, frontend=None, to_ivy=False)
-        elif frontend: 
+        if data is None: 
+            # create an empty array as a placeholder
+            data = ivy.native_array([])
+        if frontend: 
             native_proxy = NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
             ivy_proxy = IvyProxy(node, self, data=data, native_proxy=native_proxy, frontend=None, to_ivy=True)
             frontend_proxy = FRONTEND_PROXIES[frontend]
@@ -472,38 +475,12 @@ class Proxy:
     def keys(self):
         return self.tracer.keys(self)
 
-    # @property
-    # def data(self):
-    #     return self._data
-
-    # @data.setter
-    # def data(self, value):
-    #     self._data = value
-
     def __len__(self):
         raise RuntimeError(
             "'len' is not supported in symbolic tracing by default. If you want "
             "this call to be recorded, please call fx.wrap('len') at "
             "module scope"
         )
-
-
-@compatibility(is_backward_compatible=True)
-class IvyProxy(ivy.Array, Proxy):
-    """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Ivy API,
-    so that conditional tests on these attributes will not throw exception during tracing
-    """
-
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, native_proxy=None, frontend=None, to_ivy=False):
-        super(IvyProxy, self).__init__(data) 
-        Proxy.__init__(self, node, tracer, data, frontend,to_ivy)
-        self._ivy_data = data
-        self.native_proxy = native_proxy
-
-    def __repr__(self):
-        return f"IvyProxy({self.node.name})"
 
 @compatibility(is_backward_compatible=True)
 class NativeProxy(Proxy):
@@ -520,10 +497,62 @@ class NativeProxy(Proxy):
     def __repr__(self):
         return f"NativeProxy({self.node.name})"
     
-    def __getattr__(self, k) -> "Attribute":
-        return getattr(self._native_data, k)
+    def __getattr__(self, k) -> "NativeAttribute":
+        native_attr = getattr(self._native_data, k)
+        if callable(native_attr):
+            return NativeAttribute(self, getattr(type(self._native_data), k))
+        else:
+            return native_attr
 
+@compatibility(is_backward_compatible=True)
+class NativeAttribute(NativeProxy):
+    @compatibility(is_backward_compatible=True)
+    def __init__(self, root: NativeProxy, attr: Callable):
+        self.root = root
+        self.attr = attr
+        self.tracer = root.tracer
+        self._node: Optional[Node] = None
+        self._meta_tensor = root._native_data
 
+    @property
+    def node(self):
+        # the node for attributes is added lazily, since most will just be method calls
+        # which do not rely on the getitem call
+        if self._node is None:
+            self._node = self.tracer.create_proxy(
+                "call_function", getattr, (self.root, self.attr), {}, data=None
+            ).node
+        return self._node
+
+    def __call__(self, *args, **kwargs):
+        nargs = (self.root,) + args 
+        return self.attr(*nargs, **kwargs)
+        
+@compatibility(is_backward_compatible=True)
+class IvyProxy(ivy.Array, Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, native_proxy=None, frontend=None, to_ivy=False):
+        super(IvyProxy, self).__init__(data) 
+        Proxy.__init__(self, node, tracer, data, frontend,to_ivy)
+        self._ivy_data = self._data
+        self._data = native_proxy # override the _data to return a NativeProxy
+    
+    @property
+    def data(self) -> NativeProxy:
+        """The native proxy being wrapped in self."""
+        return self._data
+    
+    @data.setter
+    def data(self, data):
+        self._data = data
+
+    def __repr__(self):
+        return f"IvyProxy({self.node.name})"
 
 # Frontend Proxies
 @compatibility(is_backward_compatible=True)
@@ -533,12 +562,39 @@ class Torch_FrontendProxy(Tensor, Proxy):
     attribute accesses pass through to our underlying  Frontend API,
     so that conditional tests on these attributes will not throw exception during tracing
     """
-
+    def _to_ivy_proxy(x):
+        if isinstance(x, NativeProxy):
+            return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+        elif hasattr(x, "ivy_array"):
+            return x.ivy_array
+        return x
+    
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, ivy_proxy=None, frontend=None, to_ivy=False, **kwargs):
         super(Torch_FrontendProxy, self).__init__(array=data, **kwargs)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
         self.frontend = 'torch'
-        self.ivy_proxy = ivy_proxy
+        self._ivy_data = self._ivy_array
+        self._ivy_array = ivy_proxy  #override the _ivy_array to return an IvyProxy
+    
+    @property
+    def ivy_array(self) -> IvyProxy:
+        """The ivy proxy being wrapped in self."""
+        return self._ivy_array
+    
+    @ivy_array.setter
+    def ivy_array(self, array):
+        self._ivy_array = (
+            IvyProxy(node=array.node, tracer=array.tracer, data=array._native_data, native_proxy=array ) if isinstance(array, NativeProxy) else array
+        )
+
+    def __getitem__(self, query, /):
+        ivy_args = ivy.nested_map([self, query], Torch_FrontendProxy._to_ivy_proxy )
+        ret = ivy.get_item(*ivy_args)
+        return Torch_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret)
+
+    def __setitem__(self, key, value, /):
+        key, value = ivy.nested_map([key, value], Torch_FrontendProxy._to_ivy_proxy )
+        self.ivy_array[key] = value
 
     def __repr__(self):
         return f"Torch_FrontendProxy({self.node.name})"
@@ -713,7 +769,7 @@ for method in magic_methods:
 
     def _scope(method):
         def impl(*args, **kwargs):
-            native_method =  getattr(args[0]._native_data, method)
+            native_method =  getattr(type(args[0]._native_data), method)
             return native_method(*args,**kwargs)
 
         impl.__name__ = method
@@ -726,7 +782,7 @@ def _define_reflectable(orig_method_name):
     method_name = f'__r{orig_method_name.strip("_")}__'
 
     def impl(self, rhs):
-        native_reflectable = getattr(self._native_data, orig_method_name)
+        native_reflectable = getattr(type(self._native_data), orig_method_name)
         return native_reflectable(self, rhs)
 
     impl.__name__ = method_name
@@ -741,7 +797,7 @@ for method in inplace_methods:
 
     def _scope(method):
         def impl(*args, **kwargs):
-            native_inp_method = getattr(args[0]._native_data, method)
+            native_inp_method = getattr(type(args[0]._native_data), method)
             return native_inp_method(*args, **kwargs)
 
         impl.__name__ = method
