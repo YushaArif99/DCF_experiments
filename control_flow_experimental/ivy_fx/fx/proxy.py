@@ -28,7 +28,8 @@ from .node import Target, Node, Argument, base_types, map_aggregate
 from ._compatibility import compatibility
 from .immutable_collections import Constant
 import ivy
-
+import graph_compiler.globals as glob
+from graph_compiler.conversion import _to_ND
 # import frontend tensors
 from ivy.functional.frontends.torch import Tensor
 from ivy.functional.frontends.jax import DeviceArray
@@ -166,6 +167,7 @@ class TracerBase:
         data: Union[ivy.Array, ivy.NativeArray, Number, Iterable[Number]] = None,
         frontend: str = None,
         to_ivy=False,
+        with_numpy=True,
     ) -> "Proxy":
         # FP -> IP -> NP ; where
         # FP : FrontendProxy 
@@ -177,6 +179,8 @@ class TracerBase:
         if data is None: 
             # create an empty array as a placeholder
             data = ivy.native_array([])
+        if ivy.current_backend_str() == "numpy" or with_numpy:
+            data = _to_ND(data) 
         if frontend: 
             native_proxy = NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
             ivy_proxy = IvyProxy(node, self, data=data, native_proxy=native_proxy, frontend=None, to_ivy=True)
@@ -201,6 +205,7 @@ class TracerBase:
         data: Union[ivy.Array, ivy.NativeArray] = None,
         frontend: str = None,
         to_ivy=False,
+        with_numpy=True,
     ):
         """
         Create a Node from the given arguments, then return the Node
@@ -220,7 +225,7 @@ class TracerBase:
         node = self.create_node(kind, target, args_, kwargs_, name, type_expr)
 
         if not proxy_factory_fn:
-            proxy = self.proxy(node, data, frontend=frontend, to_ivy=to_ivy)
+            proxy = self.proxy(node, data, frontend=frontend, to_ivy=to_ivy, with_numpy=with_numpy)
         else:
             proxy = proxy_factory_fn(node)
 
@@ -398,7 +403,7 @@ class Proxy:
         return f"Proxy({self.node.name})"
 
     def __getattr__(self, k) -> "Attribute":
-        return getattr(self._meta_tensor, k)
+        return Attribute(self, k) #getattr(self._meta_tensor, k)
 
     def __call__(self, *args, **kwargs) -> "Proxy":
         return self.tracer.create_proxy(
@@ -481,6 +486,13 @@ class Proxy:
             "this call to be recorded, please call fx.wrap('len') at "
             "module scope"
         )
+    
+    def _to_ivy_proxy(self, x):
+        if isinstance(x, NativeProxy):
+            return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+        elif hasattr(x, "ivy_array"):
+            return x.ivy_array
+        return x
 
 @compatibility(is_backward_compatible=True)
 class NativeProxy(Proxy):
@@ -499,6 +511,10 @@ class NativeProxy(Proxy):
     
     def __getattr__(self, k) -> "NativeAttribute":
         native_attr = getattr(self._native_data, k)
+        if k in ["at"]:#TODO: glob.GRAPH_ATTRIBUTES[ivy.current_backend_str()]:
+            return self.tracer.create_proxy(
+                "call_function", getattr, (self, k), {}, data=native_attr
+            )
         if callable(native_attr):
             return NativeAttribute(self, getattr(type(self._native_data), k))
         else:
@@ -512,8 +528,9 @@ class NativeAttribute(NativeProxy):
         self.attr = attr
         self.tracer = root.tracer
         self._node: Optional[Node] = None
-        self._meta_tensor = root._native_data
 
+    def __repr__(self):
+        return f"NativeAttribute({self.attr.__name__})"
     @property
     def node(self):
         # the node for attributes is added lazily, since most will just be method calls
@@ -541,6 +558,9 @@ class IvyProxy(ivy.Array, Proxy):
         Proxy.__init__(self, node, tracer, data, frontend,to_ivy)
         self._ivy_data = self._data
         self._data = native_proxy # override the _data to return a NativeProxy
+
+    def __getattr__(self, item):
+        return getattr(self._data, item)
     
     @property
     def data(self) -> NativeProxy:
@@ -562,13 +582,6 @@ class Torch_FrontendProxy(Tensor, Proxy):
     attribute accesses pass through to our underlying  Frontend API,
     so that conditional tests on these attributes will not throw exception during tracing
     """
-    def _to_ivy_proxy(x):
-        if isinstance(x, NativeProxy):
-            return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
-        elif hasattr(x, "ivy_array"):
-            return x.ivy_array
-        return x
-    
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, ivy_proxy=None, frontend=None, to_ivy=False, **kwargs):
         super(Torch_FrontendProxy, self).__init__(array=data, **kwargs)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
@@ -586,14 +599,13 @@ class Torch_FrontendProxy(Tensor, Proxy):
         self._ivy_array = (
             IvyProxy(node=array.node, tracer=array.tracer, data=array._native_data, native_proxy=array ) if isinstance(array, NativeProxy) else array
         )
-
     def __getitem__(self, query, /):
-        ivy_args = ivy.nested_map([self, query], Torch_FrontendProxy._to_ivy_proxy )
+        ivy_args = ivy.nested_map([self, query], lambda a:Torch_FrontendProxy._to_ivy_proxy(self,a) )
         ret = ivy.get_item(*ivy_args)
         return Torch_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret)
 
     def __setitem__(self, key, value, /):
-        key, value = ivy.nested_map([key, value], Torch_FrontendProxy._to_ivy_proxy )
+        key, value = ivy.nested_map([key, value], lambda a:Torch_FrontendProxy._to_ivy_proxy(self,a) )
         self.ivy_array[key] = value
 
     def __repr__(self):
@@ -612,7 +624,8 @@ class JAX_FrontendProxy(DeviceArray, Proxy):
         super(JAX_FrontendProxy, self).__init__(array=data, **kwargs)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
         self.frontend = 'jax'
-        self.ivy_array = ivy_proxy
+        self._ivy_data = self._ivy_array
+        self._ivy_array = ivy_proxy  #override the _ivy_array to return an IvyProxy
 
     def __repr__(self):
         return f"JAX_FrontendProxy({self.node.name})"
@@ -630,7 +643,13 @@ class TF_FrontendProxy(EagerTensor, Proxy):
         super(TF_FrontendProxy, self).__init__(array=data)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
         self.frontend = 'tensorflow'
-        self.ivy_proxy= ivy_proxy
+        self._ivy_data = self._ivy_array
+        self._ivy_array = ivy_proxy  #override the _ivy_array to return an IvyProxy
+
+    def __getitem__(self, slice_spec, var=None, name="getitem"):
+        ivy_args = ivy.nested_map([self, slice_spec], lambda a:TF_FrontendProxy._to_ivy_proxy(self,a))
+        ret = ivy.get_item(*ivy_args)
+        return TF_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret)
 
     def __repr__(self):
         return f"TF_FrontendProxy({self.node.name})"
@@ -648,7 +667,28 @@ class Numpy_FrontendProxy(ndarray, Proxy):
         super(Numpy_FrontendProxy, self).__init__(shape=shape, dtype=dtype, **kwargs)
         Proxy.__init__(self, node, tracer, self.ivy_array, frontend, to_ivy)
         self.frontend = 'numpy'
-        self.ivy_proxy = ivy_proxy
+        self._ivy_data = self._ivy_array
+        self._ivy_array = ivy_proxy  #override the _ivy_array to return an IvyProxy
+    
+    @property
+    def ivy_array(self):
+        return self._ivy_array
+    
+    @ivy_array.setter
+    def ivy_array(self, array):
+        self._ivy_array = (
+            IvyProxy(node=array.node, tracer=array.tracer, data=array._native_data, native_proxy=array) if not isinstance(array, IvyProxy) else array
+        )
+
+    def __getitem__(self, key, /):
+        ivy_args = ivy.nested_map([self, key], lambda a: Numpy_FrontendProxy._to_ivy_proxy(self, a))
+        ret = ivy.get_item(*ivy_args)
+        return Numpy_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret, _init_overload=True)
+
+    def __setitem__(self, key, value, /):
+        key, value = ivy.nested_map([key, value], lambda a: Numpy_FrontendProxy._to_ivy_proxy(self, a))
+        self.ivy_array[key] = value
+
     def __repr__(self):
         return f"Numpy_FrontendProxy({self.node.name})"
 
@@ -676,6 +716,9 @@ class Attribute(Proxy):
         return self.tracer.create_proxy(
             "call_method", self.attr, (self.root,) + args, kwargs, data=None
         )
+    
+    def __repr__(self):
+        return f"Attribute({self.attr})"
 
 @compatibility(is_backward_compatible=False)
 class ParameterProxy(Proxy):
