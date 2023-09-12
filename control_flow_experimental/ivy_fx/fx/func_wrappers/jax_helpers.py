@@ -16,9 +16,9 @@ import functools
 def _from_jax_frontend_proxy_to_ivy_proxy(x):
     if isinstance(x, JAX_FrontendProxy) and x.weak_type and x.ivy_array.shape == ():
         setattr(x.ivy_array, "weak_type", True)
-        return x.ivy_proxy 
-    if hasattr(x, "ivy_proxy"):
-        return x.ivy_proxy 
+        return x.ivy_array 
+    if hasattr(x, "ivy_array"):
+        return x.ivy_array 
 
     if isinstance(x, NativeProxy):
         return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)

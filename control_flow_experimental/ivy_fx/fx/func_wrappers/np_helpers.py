@@ -14,8 +14,8 @@ import platform
 
 
 def _numpy_frontend_to_ivy(x: Any) -> Any:
-    if hasattr(x, "ivy_proxy"):
-        return x.ivy_proxy 
+    if hasattr(x, "ivy_array"):
+        return x.ivy_array 
     else:
         return x
 

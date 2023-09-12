@@ -3,7 +3,7 @@ from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativePro
 from typing import Any, Iterable, Union, Optional, Dict, Tuple, Callable
 import inspect
 import sys
-
+import numpy as np 
 ###########
 # Helpers #
 ###########
@@ -11,7 +11,7 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
     to_ignore = ivy.default(to_ignore, ())
     if isinstance(x, to_ignore):
         return x
-    if isinstance(x, IvyProxy):
+    if isinstance(x, (IvyProxy, ivy.Array)):
         return x.data
     elif hasattr(x, "ivy_array") and isinstance(x.ivy_array, IvyProxy):
         return x.ivy_array.data
@@ -27,7 +27,7 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
 
 
 def _to_ivy(x: Any) -> Any:
-    if isinstance(x, IvyProxy):
+    if isinstance(x, (IvyProxy, ivy.Array)):
         return x
     elif isinstance(x, ivy.NativeShape):  # TODO: add support for ShapeProxies
         return ivy.Shape(x)
@@ -35,8 +35,9 @@ def _to_ivy(x: Any) -> Any:
         return x.to_ivy()
     if isinstance(x, NativeProxy):
         return IvyProxy(node=x.node, tracer=x.tracer, data=x._native_data, native_proxy=x)
+    if ivy.is_native_array(x) or isinstance(x,np.ndarray):
+        return ivy.Array(x)
     return x
-
 
 def _args_to_native(
     *args: Iterable[Any],

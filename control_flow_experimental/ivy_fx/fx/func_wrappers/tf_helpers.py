@@ -12,8 +12,8 @@ import functools
 
 
 def _tf_frontend_proxy_to_ivy(x):
-    if hasattr(x, "ivy_proxy"):
-        return x.ivy_proxy
+    if hasattr(x, "ivy_array"):
+        return x.ivy_array
     return x
 
 

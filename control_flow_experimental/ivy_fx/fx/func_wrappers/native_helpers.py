@@ -13,10 +13,10 @@ def convert_proxies_to_ivy_arrays(func):
     @functools.wraps(func)
     def _convert_proxies_to_ivy_arrays(*args, **kwargs):
         args = ivy.nested_map(
-            args, lambda a: a._meta_tensor if isinstance(a, Proxy) else a
+            args, lambda a: a._meta_tensor if isinstance(a, Proxy) else a, shallow=False,
         )
         kwargs = ivy.nested_map(
-            kwargs, lambda a: a._meta_tensor if isinstance(a, Proxy) else a
+            kwargs, lambda a: a._meta_tensor if isinstance(a, Proxy) else a, shallow=False,
         )
 
         return func(*args, **kwargs)

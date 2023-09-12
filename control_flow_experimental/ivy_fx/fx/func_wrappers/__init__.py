@@ -39,15 +39,15 @@ frontend_replacement_dict = {
         },
     "numpy": {
         "inputs_to_ivy_arrays": inputs_to_ivy_proxies_np,
-        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_np
+        "outputs_to_numpy_arrays": outputs_to_frontend_proxies_np,
         },
     "tensorflow": {
         "inputs_to_ivy_arrays": inputs_to_ivy_proxies_tf,
-        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_tf
+        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_tf,
         },
     "jax": {
         "inputs_to_ivy_arrays": inputs_to_ivy_proxies_jax,
-        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_jax
+        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_jax,
         },
 }
 
@@ -73,19 +73,35 @@ def replace_decorators(func, frontend=None):
     Replaces some decorators of a function with others using the global replacement dict.
     :param func: The function to replace the decorators of.
     """
+    if frontend == "numpy":
+        import ivy.functional.frontends.numpy.func_wrapper as np_frontend
+        frontend_replacement_dict[frontend]["from_zero_dim_arrays_to_scalar"] = getattr(np_frontend, "from_zero_dim_arrays_to_scalar")
+        frontend_replacement_dict[frontend]["handle_numpy_out"] = getattr(np_frontend, "handle_numpy_out")
+        frontend_replacement_dict[frontend]["handle_numpy_dtype"] = getattr(np_frontend,"handle_numpy_dtype")
+        frontend_replacement_dict[frontend]["handle_numpy_casting"] = getattr(np_frontend, "handle_numpy_casting")
+        frontend_replacement_dict[frontend]["handle_numpy_casting_special"] = getattr(np_frontend,"handle_numpy_casting_special") 
+    elif frontend == "torch":
+        import ivy.functional.frontends.torch.func_wrapper as torch_frontend
+    elif frontend == "jax":
+        import ivy.functional.frontends.jax.func_wrapper as jax_frontend
+        frontend_replacement_dict[frontend]["handle_jax_dtype"] = getattr(jax_frontend, "handle_jax_dtype")
+    elif frontend == "tensorflow":
+        import ivy.functional.frontends.tensorflow.func_wrapper as tensorflow_frontend
+        frontend_replacement_dict[frontend]["handle_tf_dtype"] =getattr(tensorflow_frontend, "handle_tf_dtype")
+
     actual_decorators = []
     replacement_dict = frontend_replacement_dict[frontend] if frontend else  backend_replacement_dict
-    if func.__name__ == "asarray":
+    if func.__name__ == "asarray" and "frontends" not in func.__module__:
         # asarray contains asarray-specific decorators
         # so we will handle it seperately
         actual_decorators = asarray_decorators
     else:
-        for decorator in (
+        for decorator in set(
             FN_DECORATORS
             + list(dtype_device_dict.keys())
+            + list(frontend_replacement_dict[frontend].keys())
             + [
                 "handle_numpy_arrays_in_specific_backend",
-                "outputs_to_frontend_arrays",
             ]
         ):
             if hasattr(func, decorator):
@@ -142,7 +158,9 @@ def replace_decorators(func, frontend=None):
 def get_replacement_func(func):
    try:
     new_fn = ALL_FUNCS[func.__name__]
-    new_fn._orig_fn = func # store the original function as it might be used in the proxy-implementation
+    # store the original function as it might be used in the proxy-implementation
+    new_fn.__dict__ = func.__dict__
+    new_fn._orig_fn = func 
    except KeyError:
     raise KeyError(f"No replacement function found for {func.__name__}")
    
