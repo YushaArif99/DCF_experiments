@@ -41,6 +41,7 @@ from .func_wrappers import (
 )
 
 import graph_compiler.globals as glob
+from graph_compiler.conversion import _dtype_and_dev_to_ivy, native_array_to_frontend, _to_ND, _from_ND
 from graph_compiler.wrapping import FUNC_TO_PATH
 from graph_compiler.graph import Graph as IvyGraph
 from graph_compiler.numpy_proxy import custom_np_classes, custom_np_class_names
@@ -153,7 +154,7 @@ def _not_to_trace(orig_fn, *args, **kwargs):
     # attributes to ignore
     att_name = None
     if orig_fn.__name__ in ["__getattr__", "__setattr__", "__getattribute__"]:
-        att_name = args[0]
+        att_name = args[1]
         # return if the attribute being retrieved is another built-in method
         if att_name[0:2] == "__":
             return True
@@ -1003,6 +1004,7 @@ class Tracer(TracerBase):
         constant_args=None,
         frontend=None,
         to_ivy=False,
+        with_numpy=True,
         *concr_args,
         **concr_kwargs,
     ):
@@ -1107,6 +1109,7 @@ class Tracer(TracerBase):
                 data=proxy_data,
                 frontend=frontend,
                 to_ivy=to_ivy,
+                with_numpy=with_numpy,
             )
 
         arg_names = [next(names_iter) for idx in range(skip_arg_idx, total_args)]
@@ -1206,6 +1209,7 @@ class Tracer(TracerBase):
         args=[],
         frontend=None,
         to_ivy=False,
+        with_numpy=True,
         **kwargs,
     ) -> Graph:
         """
@@ -1275,6 +1279,7 @@ class Tracer(TracerBase):
                 constant_args,
                 frontend,
                 to_ivy,
+                with_numpy,
                 *args,
                 **kwargs,
             )
@@ -1541,15 +1546,16 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
-                if orig_fn.__name__ in glob.CREATION_FUNCS[ivy.current_backend_str()]:
+                if hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.CREATION_FUNCS[ivy.current_backend_str()]:
                     # creation functions (eg: asarray, eye, linspace) modify the input types
                     # i.e (int/float/Sequence[ints] => NativeArray)
                     # we therefore need to execute the orig_fn to get the new native array
                     # which will be used to create the corresponding native proxy
 
-                    # get the concrete args/kwargs
-                    nargs, nkwargs = ivy.nested_map([args,kwargs], lambda a: a._meta_tensor if isinstance(a, Proxy) else a,shallow=False)
-                    data = orig_fn(*nargs, **nkwargs)
+                    # get the concrete args/kwargs. Also handle conversions for NewNDArrays
+                    nargs, nkwargs = ivy.nested_map([args,kwargs], lambda a: _from_ND(a._meta_tensor) if isinstance(a, Proxy) else a,shallow=False)
+                    ret = orig_fn(*nargs, **nkwargs)
+                    data = ivy.nested_map(ret, lambda a: _to_ND(a),shallow=False,)
                 else:
                     data = proxy._meta_tensor
 
@@ -1823,7 +1829,7 @@ def symbolic_trace(
     constant_args: Optional[Dict[str, Any]] = None,
     frontend: Optional[str] = None,
     to_ivy: bool = False,
-    with_numpy: bool = False,
+    with_numpy: bool = True,
     generate_source: bool = False,
     control_flow: bool = False,
     debug_mode: bool = False,
@@ -1931,7 +1937,7 @@ def symbolic_trace(
             )
 
         # explicitly wrap ivy control flow ops since we wont trace into tf.cond/jax.lax.cond etc.
-        for f in [ivy.if_else, ivy.if_exp, ivy.for_loop, ivy.while_loop]:
+        for f in [ivy.if_else, ivy.for_loop, ivy.while_loop]:
             patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f, to_ivy=to_ivy))
 
         # explicitly wrap all ast transform functions
@@ -1964,7 +1970,7 @@ def symbolic_trace(
                 )
             else:
                 tracer_graph = tracer.trace(
-                    root, constant_args, args=args, frontend=frontend, to_ivy=to_ivy, **kwargs
+                    root, constant_args, args=args, frontend=frontend, to_ivy=to_ivy, with_numpy=with_numpy, **kwargs
                 )
         except SymTraceError:
             raise ivy.utils.exceptions.IvyException(
