@@ -1839,9 +1839,10 @@ def symbolic_trace(
     """
     Symbolic tracing API
 
-    Given a ``ivy.Module`` or function instance ``root``, this function will return an FX Graph
-    constructed by recording operations seen while tracing through ``root``.
-
+    Given a ``torch.nn.Module`` or function instance ``root``, this function constructs an fx graph by recording operations seen while 
+    tracing through ``root``. The fx graph is then converted into an Ivy Graph and both the graph are returned. If ``debug_mode=True``,
+    only the fx graph will be returned.
+     
     ``constant_args`` allows you to partially specialize your function, whether it's to remove control flow or data structures.
 
     For example::
@@ -1852,9 +1853,9 @@ def symbolic_trace(
             else:
                 return a*2
 
-    FX can typically not trace through this due to the presence of control
-    flow. However, we can use `constant_args` to specialize on the value of
-    `b` to trace through this::
+    We can typically not trace through this due to the presence of control
+    flow. However, if the control flow is static,  we can use `constant_args`
+    to specialize on the value of `b` to trace through this::
 
         f = fx.symbolic_trace(f, constant_args={'b': False})
         assert f(3, False)  == 6
@@ -1881,14 +1882,20 @@ def symbolic_trace(
         - constant_args (Optional[Dict[str, any]]): Constant inputs to be partially specialized
         - args Iterable[Union[ivy.Array, ivy.NativeArray]]: inputs to initialize the proxies with.
         - kwargs (Optional[Dict[str, any]]) : keyword inputs to initialize the proxies with.
-        ``(Note):`` There is no real computation performed, the inputs are merely used to create specialized
-        ``IvyProxies`` that are more stable when working with frontends/ivy functions.
-        - frontend (Optional[str, None]): The frontend framework to wrap. Default is None
+        ``(Note):`` There is no real computation performed, the inputs are merely used to create subclassed
+        Proxies that can emulate arraylikes.
+        - stateful (Optional[List]) : list of stateful args such as the instance of a stateful module passed when 
+        tracing modules. This is needed when accessing stateful attributes of the module(eg: ``self.x``). 
+        - frontend (Optional[str, None]): The frontend framework to wrap. This is requiried when transpiling
+         as we need to apply custom decorators to the frontends to allow proxy conversions. Default is None
         - to_ivy (bool): Whether to trace into ivy functions or treat them as leaf nodes. Default is False.
         - to_numpy (bool): Whether to track numpy function calls. Default is False.
         - generate_source (bool): Whether to reload the sourcecode of the Ivy Graph. Default is False.
+        - control_flow (bool): Whether to handle dynamic elements such as control_flow/builtins/typecasts etc.
+        by AST-transformations on the root function. Default is False.
+        - debug_mode (bool): Whether to return the fx graph or convert it into an ivy graph. Default is False. 
     Returns:
-        Graph: an fx graph created from the recorded operations from ``root``.
+        Graph: fx graph and corresponding ivy graph created from the recorded operations from ``root``.
     """
 
     """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
@@ -1959,7 +1966,7 @@ def symbolic_trace(
             tracer = Tracer()
             if isinstance(root, IvyGraph):
                 root._scripted_call.constants = root.constants
-                tracer_graph = tracer.trace(
+                fx_graph = tracer.trace(
                     root._scripted_call,
                     constant_args,
                     args=args,
@@ -1969,7 +1976,7 @@ def symbolic_trace(
                     **root.constants,
                 )
             else:
-                tracer_graph = tracer.trace(
+                fx_graph = tracer.trace(
                     root, constant_args, args=args, frontend=frontend, to_ivy=to_ivy, with_numpy=with_numpy, **kwargs
                 )
         except SymTraceError:
@@ -1977,11 +1984,11 @@ def symbolic_trace(
                 message="Error while symbolically tracing the function."
             )
         if debug_mode:
-            return tracer_graph, None
+            return fx_graph, None
         # convert the tracer graph into an ivy graph
         try:
             ivy_graph = tracer_to_ivy_graph(
-                tracer_graph, root, to_ivy=to_ivy, with_numpy=with_numpy, stateful=stateful,
+                fx_graph, root, to_ivy=to_ivy, with_numpy=with_numpy, stateful=stateful,
             )
         except GraphConvertError:
             raise ivy.utils.exceptions.IvyException(
@@ -2000,8 +2007,73 @@ def symbolic_trace(
         path=None,
     )
 
-    return tracer_graph, ivy_graph
+    return fx_graph, ivy_graph
 
+@compatibility(is_backward_compatible=True)
+def symbolic_transpile(
+    root: Union[ivy.Module, Callable[..., Any]],
+    args: Iterable[Union[ivy.Array, ivy.NativeArray]],
+    constant_args: Optional[Dict[str, Any]] = None,
+    source: str = None,
+    to: str = None,
+    with_numpy: bool = True,
+    control_flow: bool = False,
+    debug_mode: bool = False,
+    stateful: Optional[List] = [],
+    **kwargs,
+) -> Graph:
+    ivy.set_backend(source)
+    fx_graph, ivy_graph = symbolic_trace(
+        root,
+        args=args,
+        constant_args=constant_args,
+        with_numpy=with_numpy,
+        control_flow=control_flow,
+        stateful=stateful,
+        **kwargs,
+    )
+    if debug_mode:
+        fx_graph.print_tabular()
+        quit(0)
+
+    ivy_graph.reload_sourcecode(frontend=source)
+    ivy_graph.constants = ivy.nested_map(
+        ivy_graph.constants,
+        _dtype_and_dev_to_ivy,
+    )
+    if to != "ivy":
+        ivy.set_backend(to)
+    args = ivy.nested_map(
+        args,
+        native_array_to_frontend,
+        include_derived={dict: True},
+    )
+    kwargs = ivy.nested_map(
+        kwargs,
+        native_array_to_frontend,
+        include_derived={dict: True},
+    )
+    ivy_graph.constants = ivy.nested_map(
+        ivy_graph.constants,
+        native_array_to_frontend,
+    )
+    if with_numpy or ivy.current_backend_str == "numpy":
+        ivy_graph.constants = ivy.nested_map(
+            ivy_graph.constants,
+            _to_ND,
+        )
+    if to == "ivy":
+        fx_graph, ivy_graph = symbolic_trace(ivy_graph,args=args, to_ivy=True, constant_args=constant_args,frontend=source,with_numpy=with_numpy, control_flow=control_flow,stateful=stateful, **kwargs)
+    else:
+        fx_graph, ivy_graph = symbolic_trace(ivy_graph,args=args, constant_args=constant_args,frontend=source,with_numpy=with_numpy, control_flow=control_flow,stateful=stateful, **kwargs)
+        ivy.previous_backend()    
+    if with_numpy or ivy.current_backend_str == "numpy":
+        ivy_graph.constants = ivy.nested_map(
+            ivy_graph.constants,
+            _from_ND,
+        )
+    ivy.previous_backend()
+    return ivy_graph
 # ----------------------------------------
 # AST Transformed iterator/boolean helpers
 # ----------------------------------------

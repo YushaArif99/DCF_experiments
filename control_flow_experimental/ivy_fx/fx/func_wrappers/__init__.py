@@ -34,20 +34,20 @@ backend_replacement_dict = {
 
 frontend_replacement_dict = {
     "torch": {
-        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_torch,
-        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_torch
+        "inputs_to_ivy_arrays_torch": inputs_to_ivy_proxies_torch,
+        "outputs_to_frontend_arrays_torch": outputs_to_frontend_proxies_torch
         },
     "numpy": {
-        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_np,
-        "outputs_to_numpy_arrays": outputs_to_frontend_proxies_np,
+        "inputs_to_ivy_arrays_numpy": inputs_to_ivy_proxies_np,
+        "outputs_to_numpy_arrays_numpy": outputs_to_frontend_proxies_np,
         },
     "tensorflow": {
-        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_tf,
-        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_tf,
+        "inputs_to_ivy_arrays_tf": inputs_to_ivy_proxies_tf,
+        "outputs_to_frontend_arrays_tf": outputs_to_frontend_proxies_tf,
         },
     "jax": {
-        "inputs_to_ivy_arrays": inputs_to_ivy_proxies_jax,
-        "outputs_to_frontend_arrays": outputs_to_frontend_proxies_jax,
+        "inputs_to_ivy_arrays_jax": inputs_to_ivy_proxies_jax,
+        "outputs_to_frontend_arrays_jax": outputs_to_frontend_proxies_jax,
         },
 }
 
@@ -62,9 +62,9 @@ dtype_device_dict = {
 
 asarray_decorators = [
     asarray_to_native_proxies_and_back,
-    ivy.asarray_infer_device,
-    ivy.asarray_handle_nestable,
-    ivy.asarray_inputs_to_native_shapes,
+    ivy.functional.ivy.creation._asarray_infer_device,
+    ivy.functional.ivy.creation._asarray_handle_nestable,
+    ivy.functional.ivy.creation._asarray_inputs_to_native_shapes,
 ]
 
 
@@ -82,13 +82,14 @@ def replace_decorators(func, frontend=None):
         frontend_replacement_dict[frontend]["handle_numpy_casting_special"] = getattr(np_frontend,"handle_numpy_casting_special") 
     elif frontend == "torch":
         import ivy.functional.frontends.torch.func_wrapper as torch_frontend
+        frontend_replacement_dict[frontend]["numpy_to_torch_style_args"] =getattr(torch_frontend, "numpy_to_torch_style_args")
     elif frontend == "jax":
         import ivy.functional.frontends.jax.func_wrapper as jax_frontend
         frontend_replacement_dict[frontend]["handle_jax_dtype"] = getattr(jax_frontend, "handle_jax_dtype")
     elif frontend == "tensorflow":
         import ivy.functional.frontends.tensorflow.func_wrapper as tensorflow_frontend
         frontend_replacement_dict[frontend]["handle_tf_dtype"] =getattr(tensorflow_frontend, "handle_tf_dtype")
-
+        frontend_replacement_dict[frontend]["wrap_raw_ops_alias"] =getattr(tensorflow_frontend, "wrap_raw_ops_alias")
     actual_decorators = []
     replacement_dict = frontend_replacement_dict[frontend] if frontend else  backend_replacement_dict
     if func.__name__ == "asarray" and "frontends" not in func.__module__:
@@ -128,8 +129,9 @@ def replace_decorators(func, frontend=None):
 
                         decorator_func = wrapper
                     else:
+                        dictionary_info, version = func.dictionary_info
                         decorator_func = wrapper_cls(
-                            func.dictionary_info, func.version_info
+                            dictionary_info, version
                         )
                 else:
                     decorator_func = (
