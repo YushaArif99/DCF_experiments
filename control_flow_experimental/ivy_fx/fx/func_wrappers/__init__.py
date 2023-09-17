@@ -49,6 +49,7 @@ frontend_replacement_dict = {
         "inputs_to_ivy_arrays_jax": inputs_to_ivy_proxies_jax,
         "outputs_to_frontend_arrays_jax": outputs_to_frontend_proxies_jax,
         },
+    None: {},
 }
 
 dtype_device_dict = {

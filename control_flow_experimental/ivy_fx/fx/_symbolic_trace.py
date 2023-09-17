@@ -154,7 +154,10 @@ def _not_to_trace(orig_fn, *args, **kwargs):
     # attributes to ignore
     att_name = None
     if orig_fn.__name__ in ["__getattr__", "__setattr__", "__getattribute__"]:
-        att_name = args[1]
+        try:
+            att_name = args[1]
+        except IndexError:
+            return True
         # return if the attribute being retrieved is another built-in method
         if att_name[0:2] == "__":
             return True
@@ -1372,7 +1375,7 @@ def _find_proxy(*objects_to_search):
 
     def find_proxy(x):
         nonlocal proxy
-        if isinstance(x, Proxy):
+        if isinstance(x, Proxy) and proxy is None:
             proxy = x
 
     map_aggregate(objects_to_search, find_proxy)
@@ -1546,7 +1549,7 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
-                if hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.CREATION_FUNCS[ivy.current_backend_str()]:
+                if hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.CREATION_FUNCS[ivy.current_backend_str()] + glob.CREATION_FUNCS["numpy"]:
                     # creation functions (eg: asarray, eye, linspace) modify the input types
                     # i.e (int/float/Sequence[ints] => NativeArray)
                     # we therefore need to execute the orig_fn to get the new native array
@@ -1556,6 +1559,8 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
                     nargs, nkwargs = ivy.nested_map([args,kwargs], lambda a: _from_ND(a._meta_tensor) if isinstance(a, Proxy) else a,shallow=False)
                     ret = orig_fn(*nargs, **nkwargs)
                     data = ivy.nested_map(ret, lambda a: _to_ND(a),shallow=False,)
+                elif hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.ARRAY_TO_SCALAR_FUNCS["numpy"]:
+                    data = 10 #TODO: remove this hardcoding
                 else:
                     data = proxy._meta_tensor
 
@@ -1613,7 +1618,10 @@ class _PatchedFnDel(_PatchedFn):
 
 class _PatchedFnSetAttr(_PatchedFn):
     def revert(self):
-        setattr(self.frame_dict, self.fn_name, self.orig_fn)
+        try:
+            setattr(self.frame_dict, self.fn_name, self.orig_fn)
+        except Exception as e:
+            self.frame_dict.__dict__[self.fn_name] = self.orig_fn
 
 
 class _PatchedFnSetUfuncAttr(_PatchedFn):
@@ -1663,7 +1671,12 @@ class _Patcher:
             cls[name].func = new_fn
         else:
             self.patches_made.append(_PatchedFnSetAttr(cls, name, orig_fn))
-            setattr(cls, name, new_fn)
+            try:
+                setattr(cls, name, new_fn)
+            except Exception as e:
+                # this is a hack to patch Ivy's global properties (eg: ivy.default_dtype)
+                # that dont allow attribute setting (https://github.com/unifyai/ivy/blob/main/ivy/__init__.py#L1494)
+                cls.__dict__[name] = new_fn 
 
     def visit_once(self, thing: Any):
         """Return True on the first call to with thing, otherwise false"""

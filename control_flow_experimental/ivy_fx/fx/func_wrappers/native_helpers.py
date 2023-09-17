@@ -1,6 +1,6 @@
 import ivy
 from .replacement_funcs import _args_to_ivy, _args_to_native, _to_ivy, _to_native
-from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy
+from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy,IvyShapeProxy, NativeShapeProxy
 from typing import Any, Iterable, Union, Optional, Dict, Tuple, Callable
 import functools
 import warnings
@@ -39,8 +39,8 @@ def _ivy_to_native(x):
     else:
         if (isinstance(x, (list, tuple)) and len(x) > 0) and isinstance(x[0], IvyProxy):
             x = to_native(x, nested=True)
-        elif isinstance(x, IvyProxy):
-            x = to_native(x)
+        elif isinstance(x, (IvyProxy, IvyShapeProxy)):
+            x = to_native(x) 
     return x
 
 

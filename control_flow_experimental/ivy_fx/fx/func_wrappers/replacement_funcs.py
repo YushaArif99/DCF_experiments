@@ -1,5 +1,5 @@
 import ivy
-from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy
+from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy, IvyShapeProxy, NativeShapeProxy
 from typing import Any, Iterable, Union, Optional, Dict, Tuple, Callable
 import inspect
 import sys
@@ -16,8 +16,8 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
     elif hasattr(x, "ivy_array") and isinstance(x.ivy_array, IvyProxy):
         return x.ivy_array.data
     # TODO: add support for ShapeProxies
-    elif type(x) is ivy.Shape:
-        return x.shape
+    elif isinstance(x,IvyShapeProxy):
+        return x.shape # return the underlying native shape
     elif isinstance(x, ivy.Container):
         return x.cont_map(
             lambda x_, _: _to_native(x_, inplace=inplace, to_ignore=to_ignore),
@@ -29,8 +29,8 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
 def _to_ivy(x: Any) -> Any:
     if isinstance(x, (IvyProxy, ivy.Array)):
         return x
-    elif isinstance(x, ivy.NativeShape):  # TODO: add support for ShapeProxies
-        return ivy.Shape(x)
+    elif isinstance(x, NativeShapeProxy):  # TODO: add support for ShapeProxies
+        return IvyShapeProxy(node=x.node, tracer=x.tracer, shape_proxy=x)
     elif isinstance(x, ivy.Container):
         return x.to_ivy()
     if isinstance(x, NativeProxy):

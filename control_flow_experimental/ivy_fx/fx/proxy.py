@@ -227,7 +227,7 @@ class TracerBase:
         if not proxy_factory_fn:
             proxy = self.proxy(node, data, frontend=frontend, to_ivy=to_ivy, with_numpy=with_numpy)
         else:
-            proxy = proxy_factory_fn(node)
+            proxy = proxy_factory_fn(node,data)
 
         return proxy
 
@@ -403,7 +403,7 @@ class Proxy:
         return f"Proxy({self.node.name})"
 
     def __getattr__(self, k) -> "Attribute":
-        return Attribute(self, k) #getattr(self._meta_tensor, k)
+        return getattr(self._meta_tensor, k)
 
     def __call__(self, *args, **kwargs) -> "Proxy":
         return self.tracer.create_proxy(
@@ -494,6 +494,7 @@ class Proxy:
             return x.ivy_array
         return x
 
+# Native Proxies
 @compatibility(is_backward_compatible=True)
 class NativeProxy(Proxy):
     """
@@ -511,9 +512,13 @@ class NativeProxy(Proxy):
     
     def __getattr__(self, k) -> "NativeAttribute":
         native_attr = getattr(self._native_data, k)
-        if k in ["at"]:#TODO: glob.GRAPH_ATTRIBUTES[ivy.current_backend_str()]:
+        if k in glob.GRAPH_ATTRIBUTES[ivy.current_backend_str()]:
+            def _factory_fn(node,data):
+                if k == "shape":
+                    return NativeShapeProxy(node=node, tracer=self.tracer, shape=data)
+                return self.tracer.proxy(node, data)
             return self.tracer.create_proxy(
-                "call_function", getattr, (self, k), {}, data=native_attr
+                "call_function", getattr, (self, k), {}, data=native_attr, proxy_factory_fn=_factory_fn,
             )
         if callable(native_attr):
             return NativeAttribute(self, getattr(type(self._native_data), k))
@@ -546,6 +551,56 @@ class NativeAttribute(NativeProxy):
         return self.attr(*nargs, **kwargs)
         
 @compatibility(is_backward_compatible=True)
+class NativeShapeProxy(Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, frontend=None, to_ivy=False):
+        super(NativeShapeProxy, self).__init__(node, tracer, shape, frontend, to_ivy) 
+        self._native_shape = shape 
+
+    def __getattr__(self, item):
+        shape_attr = getattr(self._native_shape, item)
+
+        if callable(shape_attr):
+            return NativeAttribute(self, getattr(type(self._native_shape), item))
+        else:
+            return shape_attr
+    
+    def __iter__(self):
+        return iter(self._native_shape)
+    
+    def __len__(self):
+        return len(self._native_shape)
+    
+    def __repr__(self):
+        return f"NativeShapeProxy({self.node.name})"
+
+# Ivy Proxies
+@compatibility(is_backward_compatible=True)
+class IvyShapeProxy(ivy.Shape, Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, shape_proxy=None, frontend=None, to_ivy=False):
+        super(IvyShapeProxy, self).__init__(shape) 
+        Proxy.__init__(self, node, tracer, shape, frontend, to_ivy)
+        self._ivy_shape = self._shape
+        self._shape = shape_proxy # override the _shape to return a NativeShapeProxy
+
+    def __getattr__(self, item):
+        return getattr(self._shape, item)
+    
+    def __repr__(self):
+        return f"IvyShapeProxy({self.node.name})"
+
+@compatibility(is_backward_compatible=True)
 class IvyProxy(ivy.Array, Proxy):
     """
     A special proxy which lets "shape","dtype","size", and a few other
@@ -561,6 +616,11 @@ class IvyProxy(ivy.Array, Proxy):
 
     def __getattr__(self, item):
         return getattr(self._data, item)
+    
+    @property
+    def shape(self) -> IvyShapeProxy:
+        native_shape = NativeShapeProxy(node=self.node, tracer=self.tracer,shape=self._ivy_data.shape)
+        return IvyShapeProxy(node=self.node, tracer=self.tracer, shape=self._ivy_data.shape, shape_proxy=native_shape)
     
     @property
     def data(self) -> NativeProxy:
@@ -847,6 +907,47 @@ for method in inplace_methods:
         setattr(NativeProxy, method, impl)
     method = f'__{method.strip("_")}__'
     _scope(method)
+
+# define dunder methods for the NativeShapeProxy class     
+for method in magic_methods:
+
+    def _shape_scope(method):
+        def impl(*args, **kwargs):
+            native_method =  getattr(type(args[0]._native_shape), method)
+            return native_method(*args,**kwargs)
+
+        impl.__name__ = method
+        setattr(NativeShapeProxy, method, impl) 
+    method = f'__{method.strip("_")}__'
+    _shape_scope(method)
+
+
+def _define_reflectable(orig_method_name):
+    method_name = f'__r{orig_method_name.strip("_")}__'
+
+    def shape_impl(self, rhs):
+        native_reflectable = getattr(type(self._native_shape), orig_method_name)
+        return native_reflectable(self, rhs)
+
+    shape_impl.__name__ = method_name
+    shape_impl.__qualname__ = method_name
+    setattr(NativeShapeProxy, method_name, shape_impl)
+
+
+for orig_method_name in reflectable_magic_methods:
+    _define_reflectable(orig_method_name)
+
+for method in inplace_methods:
+
+    def _shape_scope(method):
+        def impl(*args, **kwargs):
+            native_inp_method = getattr(type(args[0]._native_shape), method)
+            return native_inp_method(*args, **kwargs)
+
+        impl.__name__ = method
+        setattr(NativeShapeProxy, method, impl)
+    method = f'__{method.strip("_")}__'
+    _shape_scope(method)
 
 FRONTEND_PROXIES = {
     "torch": Torch_FrontendProxy,
