@@ -31,7 +31,7 @@ class LogicalTransformer(BaseTransformer):
         a = x > 1 and y < 1
 
     Transformed code:
-        a = ivy.And(lambda:x>1, lambda:y<1)
+        a = cfe.And(lambda:x>1, lambda:y<1)
     """
 
     def __init__(self, root):
@@ -44,7 +44,7 @@ class LogicalTransformer(BaseTransformer):
         self.generic_visit(node)
         if isinstance(node.op, gast.Not):
             arg = ast_to_source_code(node.operand)
-            new_node_str = f"ivy.Not({arg})"
+            new_node_str = f"cfe.Not({arg})"
             # NOTE: gast.parse returns Module(body=[expr(value=...)])
             new_node = gast.parse(new_node_str).body[0].value
             return new_node
@@ -84,7 +84,7 @@ class LogicalTransformer(BaseTransformer):
             nodes = [pre_logic_node] + [post_logic_node]
 
         args = [ast_to_source_code(child) for child in nodes]
-        new_node_str = "ivy.{}(lambda:{}, lambda:{})".format(
+        new_node_str = "cfe.{}(lambda:{}, lambda:{})".format(
             api_type, args[0], args[1]
         )
         # NOTE: gast.parse return Module(body=[expr(...)])

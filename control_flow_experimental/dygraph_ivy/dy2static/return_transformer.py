@@ -195,7 +195,7 @@ class SingleReturnTransformer(BaseTransformer):
         assert value in [True, False], "value must be True or False."
         if isinstance(parent_node_of_return, gast.If):
             # Prepend control flow boolean nodes such as '__return@1 = True'
-            node_str = "{} = ivy.create_bool_as_type({}, {})".format(
+            node_str = "{} = {}".format(
                 return_name,
                 ast_to_source_code(parent_node_of_return.test).strip(),
                 value,

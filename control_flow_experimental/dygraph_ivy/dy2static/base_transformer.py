@@ -115,9 +115,9 @@ class ForLoopTuplePreTransformer(BaseTransformer):
 
     will be changed into :
 
-    >>> UUID_iterator = ivy.Indexable(B)  # make iterator-only to indexable list.
+    >>> UUID_iterator = cfe.Indexable(B)  # make iterator-only to indexable list.
     >>> for UUID_target in UUID_iterator:
-    >>>     A = ivy.Unpack(UUID_target, structure)
+    >>>     A = cfe.Unpack(UUID_target, structure)
     >>>     C
 
     make the later loop_transform have unified type:
@@ -137,7 +137,7 @@ class ForLoopTuplePreTransformer(BaseTransformer):
         tuple_iterator = unique_name.generate(FOR_ITER_ITERATOR_PREFIX)
         origin_tuple_node = node.target
         assign_iterator_node = gast.parse(
-            f"{tuple_iterator} = ivy.Indexable({ast_to_source_code(node.iter).strip()})"
+            f"{tuple_iterator} = cfe.Indexable({ast_to_source_code(node.iter).strip()})"
         ).body[0]
         node.target = gast.Name(
             id=tuple_target,
@@ -173,7 +173,7 @@ class ForLoopTuplePreTransformer(BaseTransformer):
         structure_str = str(self.tuple_node_to_unpack_structure(node))
         node_str = ast_to_source_code(node).strip()
         assign_node_str = (
-            f"{node_str} = ivy.Unpack({tuple_name}, {structure_str})"
+            f"{node_str} = cfe.Unpack({tuple_name}, {structure_str})"
         )
         assign_node = gast.parse(assign_node_str).body[0]
         return [assign_node]
@@ -397,7 +397,7 @@ class ForNodeVisitor:
         else:
             iter_var_name = ast_to_source_code(self.iter_node).strip()
 
-        convert_len_node_source_str = '{} = ivy.Len({})'.format(
+        convert_len_node_source_str = '{} = cfe.Len({})'.format(
             self.iter_var_len_name, iter_var_name
         )
 

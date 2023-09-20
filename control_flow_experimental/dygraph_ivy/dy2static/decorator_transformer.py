@@ -114,7 +114,7 @@ class DecoratorTransformer(BaseTransformer):
                     )
 
             else:
-                decofun_str = '{} = ivy.Call({})({})'.format(
+                decofun_str = '{} = cfe.Call({})({})'.format(
                     decoed_func, deco_full_name, deco_target
                 )
 

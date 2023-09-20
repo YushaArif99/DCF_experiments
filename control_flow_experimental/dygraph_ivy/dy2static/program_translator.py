@@ -123,10 +123,7 @@ def convert_to_static(function):
 
     # Return directly if decorated with @not_to_static and DO NOT Cache it
     options = getattr(function, CONVERSION_OPTIONS, None)
-    # or ignore ivy api
-    need_skip = (options is not None and options.not_convert) or is_ivy_func(
-        function
-    )
+    need_skip = (options is not None and options.not_convert)
     if need_skip:
         return function.__func__ if inspect.ismethod(function) else function
 

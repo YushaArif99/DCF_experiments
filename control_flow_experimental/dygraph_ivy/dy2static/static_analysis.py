@@ -3,7 +3,6 @@ from ..utils import gast
 from .utils_helper import (
     NodeVarType,
     index_in_list,
-    is_dygraph_api,
     is_numpy_api,
     is_ivy_api,
 )
@@ -308,10 +307,6 @@ class StaticAnalysisVisitor:
             return return_type
 
         if isinstance(node, gast.Call):
-            if is_dygraph_api(node):
-                if isinstance(node.func, gast.Attribute):
-                    if node.func.attr == "to_variable":
-                        return {NodeVarType.TENSOR}
             if is_ivy_api(node):
                 return {NodeVarType.IVY_RETURN_TYPES}
             if is_numpy_api(node):

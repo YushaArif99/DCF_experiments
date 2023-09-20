@@ -18,13 +18,12 @@ def index_in_list(array_list, item):
 
 IVY_MODULE_PREFIX = 'ivy.'
 SUPPORTED_BACKENDS_PREFIX = ['torch.', 'tf.', 'jax.', 'jnp.', 'paddle.']
-DYGRAPH_TO_STATIC_MODULE_PREFIX = 'cfe.'
+DYGRAPH_TO_STATIC_MODULE_PREFIX = 'control_flow_experimental.dygraph_ivy.dy2static'
 
 
-def is_dygraph_api(node):
+def is_internal_api(node):
     # Note: A api in module dygraph_to_static is not a real dygraph api.
-    if is_api_in_module(node, DYGRAPH_TO_STATIC_MODULE_PREFIX):
-        return False
+    return is_api_in_module(node, DYGRAPH_TO_STATIC_MODULE_PREFIX)
 
 
 def is_api_in_module(node, module_prefix):

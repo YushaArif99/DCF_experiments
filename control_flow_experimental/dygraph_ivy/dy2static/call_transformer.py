@@ -1,4 +1,4 @@
-from .utils import ast_to_source_code, is_ivy_api, is_native_backend_api
+from .utils import ast_to_source_code, is_ivy_api, is_native_backend_api, is_internal_api
 from ..utils import gast
 
 from .base_transformer import BaseTransformer
@@ -25,7 +25,7 @@ class CallTransformer(BaseTransformer):
           2. It's a python builtin function not include `len`, `zip`, `range` and `enumerate`
         """
         assert isinstance(node, gast.Call)
-        if is_ivy_api(node) or is_native_backend_api(node):
+        if is_ivy_api(node) or is_native_backend_api(node) or is_internal_api(node):
             return True
 
         func_str = ast_to_source_code(node.func).strip()
