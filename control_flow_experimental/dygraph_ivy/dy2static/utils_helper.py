@@ -17,9 +17,8 @@ def index_in_list(array_list, item):
 
 
 IVY_MODULE_PREFIX = 'ivy.'
-TORCH_MODULE_PREFIX = 'torch.'
-TF_MODULE_PREFIX = 'tf.'
-DYGRAPH_TO_STATIC_MODULE_PREFIX = 'control_flow_experimental.dygraph_ivy.dy2static'
+SUPPORTED_BACKENDS_PREFIX = ['torch.', 'tf.', 'jax.', 'jnp.', 'paddle.']
+DYGRAPH_TO_STATIC_MODULE_PREFIX = 'cfe.'
 
 
 def is_dygraph_api(node):
@@ -39,6 +38,9 @@ def is_api_in_module(node, module_prefix):
 
     func_str = astor.to_source(gast.gast_to_ast(func_node)).strip()
     try:
+        import ivy 
+        import control_flow_experimental.dygraph_ivy.dy2static as cfe
+
         return eval(f"_is_api_in_module_helper({func_str}, '{module_prefix}')")
     except Exception:
         return False
@@ -69,6 +71,8 @@ def is_numpy_api(node):
 def is_ivy_api(node):
     return is_api_in_module(node, IVY_MODULE_PREFIX)
 
+def is_native_backend_api(node):
+    return any(is_api_in_module(node, prefix) for prefix in SUPPORTED_BACKENDS_PREFIX)
 
 class NodeVarType:
     """

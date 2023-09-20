@@ -96,7 +96,7 @@ class FunctionCache:
             self._code_to_ast_caches[source_code] = root
 
         # Get static function from AST
-        static_func, file_name = ast_to_func(root, func, False)
+        static_func, file_name = ast_to_func(root, func)
 
         create_and_update_origin_info_map(root, static_func)
         return static_func

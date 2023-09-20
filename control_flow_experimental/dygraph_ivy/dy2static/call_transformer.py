@@ -1,4 +1,4 @@
-from .utils import ast_to_source_code, is_ivy_api
+from .utils import ast_to_source_code, is_ivy_api, is_native_backend_api
 from ..utils import gast
 
 from .base_transformer import BaseTransformer
@@ -25,7 +25,7 @@ class CallTransformer(BaseTransformer):
           2. It's a python builtin function not include `len`, `zip`, `range` and `enumerate`
         """
         assert isinstance(node, gast.Call)
-        if is_ivy_api(node):
+        if is_ivy_api(node) or is_native_backend_api(node):
             return True
 
         func_str = ast_to_source_code(node.func).strip()
@@ -59,7 +59,7 @@ class CallTransformer(BaseTransformer):
         if PDB_SET in func_str:
             return node
 
-        new_func_str = f"ivy.Call({func_str})"
+        new_func_str = f"cfe.Call({func_str})"
         new_func_ast = gast.parse(new_func_str).body[0].value
         node.func = new_func_ast
 
