@@ -17,7 +17,6 @@ class TypeHintTransformer(BaseTransformer):
 
     def visit_FunctionDef(self, node):
         node.returns = None
-        node.body = [n for n in node.body if not isinstance(n, gast.Expr)]
         self.generic_visit(node)
         return node
 
