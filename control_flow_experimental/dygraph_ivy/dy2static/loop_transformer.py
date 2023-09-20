@@ -23,6 +23,7 @@ from .utils import (
     create_name_str,
     create_nonlocal_stmt_nodes,
     create_dict_node,
+    create_tuple_node,
     create_set_args_node,
     get_attribute_full_name,
 )
@@ -75,7 +76,8 @@ def create_while_nodes(
 
     while_func_name = "ivy.while_loop"
     while_node_str = (
-        "{}({}, {}, vars={})".format(
+        "{} = {}({}, {}, vars={})".format(
+            ast_to_source_code(create_tuple_node(loop_var_names)).strip('\n'),
             while_func_name,
             condition_name,
             body_name,
@@ -603,6 +605,8 @@ class LoopTransformer(BaseTransformer):
 
         # 6. create & append loop body function node
         # append return values for loop body
+        body_stmts.append(gast.parse("return {}".format(', '.join(nonlocal_names))).body[0])
+
         body_func_node = gast.FunctionDef(
             name=unique_name.generate(FOR_BODY_PREFIX),
             args=gast.arguments(
@@ -676,6 +680,8 @@ class LoopTransformer(BaseTransformer):
         new_stmts.append(condition_func_node)
 
         new_body = node.body
+        # append return values for loop body
+        new_body.append(gast.parse("return {}".format(', '.join(nonlocal_names))).body[0])
         body_func_node = gast.FunctionDef(
             name=unique_name.generate(WHILE_BODY_PREFIX),
             args=gast.arguments(

@@ -257,7 +257,7 @@ def create_funcDef_node(nodes, name, input_args, return_name_ids):
     nodes = copy.copy(nodes)
     # add return statement
     if return_name_ids:
-        nodes.append(gast.Return(value=generate_name_node(return_name_ids)))
+        nodes.append(gast.Return(value=generate_name_node(return_name_ids, gen_tuple_if_single=True)))
     elif PRED_FUNC_PREFIX not in name:
         nodes.append(gast.Return(value=None))
     func_def_node = gast.FunctionDef(
@@ -1089,6 +1089,27 @@ def create_dict_node(names):
 
     dict_node = gast.Dict(keys=key_nodes, values=value_nodes)
     return dict_node
+
+def create_tuple_node(names):
+    assert isinstance(names, (list, tuple))
+
+    mapped = list(filter(lambda n: '.' not in n, names))
+    mapped = list(filter(lambda n: '[' not in n, mapped))
+    names = sorted(
+        mapped, key=mapped.index
+    )  # to keep the order, we can't use set() to unique
+    if not names:
+        return gast.Tuple(elts=[], ctx=gast.Load())
+
+    value_nodes = []
+    for var_name in names:
+        value_node = gast.Name(
+            id=str(var_name), ctx=gast.Load(), annotation=None, type_comment=None
+        )
+        value_nodes.append(value_node)
+
+    tuple_node = gast.Tuple(elts=value_nodes, ctx=gast.Load())
+    return tuple_node
 
 
 class GetterSetterHelper:

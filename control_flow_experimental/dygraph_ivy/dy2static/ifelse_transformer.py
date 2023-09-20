@@ -19,6 +19,7 @@ from control_flow_experimental.dygraph_ivy.dy2static.utils import (
     create_name_str,
     create_nonlocal_stmt_nodes,
     create_dict_node,
+    create_tuple_node,
     create_set_args_node,
 )
 
@@ -404,8 +405,9 @@ def create_convert_ifelse_node(
         false_func_source = false_func.name
 
     convert_ifelse_fn = gast.parse(
-        'ivy.if_else('
+        '{tuple_vars} = ivy.if_else('
         '{pred}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
+            tuple_vars =ast_to_source_code(create_tuple_node(cond_vars)).strip('\n'),
             pred=pred_func_source,
             true_fn=true_func_source,
             false_fn=false_func_source,
