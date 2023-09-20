@@ -59,6 +59,7 @@ RE_PYMODULE = r'[a-zA-Z0-9_]+\.'
 RETURN_NO_VALUE_VAR_NAME = "__no_value_return_var"
 RETURN_NO_VALUE_MAGIC_NUM = 1.77113e27
 
+PRED_FUNC_PREFIX = 'pred_fn'
 TRUE_FUNC_PREFIX = 'true_fn'
 FALSE_FUNC_PREFIX = 'false_fn'
 
@@ -256,7 +257,7 @@ def create_funcDef_node(nodes, name, input_args, return_name_ids):
     # add return statement
     if return_name_ids:
         nodes.append(gast.Return(value=generate_name_node(return_name_ids)))
-    else:
+    elif PRED_FUNC_PREFIX not in name:
         nodes.append(gast.Return(value=None))
     func_def_node = gast.FunctionDef(
         name=name,
@@ -1063,6 +1064,30 @@ def create_nonlocal_stmt_nodes(names):
         return []
     func_code = "nonlocal {}".format(','.join(names))
     return [gast.parse(func_code).body[0]]
+        
+def create_dict_node(names):
+    assert isinstance(names, (list, tuple))
+
+    mapped = list(filter(lambda n: '.' not in n, names))
+    mapped = list(filter(lambda n: '[' not in n, mapped))
+    names = sorted(
+        mapped, key=mapped.index
+    )  # to keep the order, we can't use set() to unique
+    if not names:
+        return gast.Dict(keys=[], values=[])
+
+    key_nodes = []
+    value_nodes = []
+    for var_name in names:
+        key_node = gast.Constant(value=str(var_name), kind=None)
+        value_node = gast.Name(
+            id=str(var_name), ctx=gast.Load(), annotation=None, type_comment=None
+        )
+        key_nodes.append(key_node)
+        value_nodes.append(value_node)
+
+    dict_node = gast.Dict(keys=key_nodes, values=value_nodes)
+    return dict_node
 
 
 class GetterSetterHelper:

@@ -22,6 +22,7 @@ from .utils import (
     create_get_args_node,
     create_name_str,
     create_nonlocal_stmt_nodes,
+    create_dict_node,
     create_set_args_node,
     get_attribute_full_name,
 )
@@ -33,9 +34,6 @@ def create_while_nodes(
     condition_name,
     body_name,
     loop_var_names,
-    push_pop_names,
-    getter_name,
-    setter_name,
 ):
     """
     Returns a list of gast.Node which represents the calling of Ivy
@@ -75,16 +73,13 @@ def create_while_nodes(
     for name in loop_var_names:
         assign_loop_var_names.append(name)
 
-    while_func_name = "ivy.While"
+    while_func_name = "ivy.while_loop"
     while_node_str = (
-        "{}({}, {}, {}, {}, return_name_ids={}, push_pop_names={})".format(
+        "{}({}, {}, vars={})".format(
             while_func_name,
             condition_name,
             body_name,
-            getter_name,
-            setter_name,
-            create_name_str(loop_var_names),
-            create_name_str(push_pop_names),
+            ast_to_source_code(create_dict_node(loop_var_names)),
         )
     )
     while_node = gast.parse(while_node_str).body[0]
@@ -578,13 +573,11 @@ class LoopTransformer(BaseTransformer):
         # we do this in CreateUndefinedVarTransformer
 
         # create non-local statement for body and cond.
-        nonlocal_names = list(loop_var_names | create_var_names)
+        nonlocal_names = list(loop_var_names | create_var_names | set(push_pop_names))
         nonlocal_names.sort()
         # TODO(dev): Need a better way to deal this.
         if ARGS_NAME in nonlocal_names:
             nonlocal_names.remove(ARGS_NAME)
-
-        nonlocal_stmt_node = create_nonlocal_stmt_nodes(nonlocal_names)
 
         # 4. append init statements
         new_stmts.extend(init_stmts)
@@ -593,7 +586,7 @@ class LoopTransformer(BaseTransformer):
         condition_func_node = gast.FunctionDef(
             name=unique_name.generate(FOR_CONDITION_PREFIX),
             args=gast.arguments(
-                args=[],
+                args=[gast.Name(id=name, ctx=gast.Param(), annotation=None, type_comment=None) for name in nonlocal_names],
                 posonlyargs=[],
                 vararg=None,
                 kwonlyargs=[],
@@ -601,7 +594,7 @@ class LoopTransformer(BaseTransformer):
                 kwarg=None,
                 defaults=[],
             ),
-            body=nonlocal_stmt_node + [gast.Return(value=cond_stmt)],
+            body=[gast.Return(value=cond_stmt)],
             decorator_list=[],
             returns=None,
             type_comment=None,
@@ -613,7 +606,7 @@ class LoopTransformer(BaseTransformer):
         body_func_node = gast.FunctionDef(
             name=unique_name.generate(FOR_BODY_PREFIX),
             args=gast.arguments(
-                args=[],
+                args=[gast.Name(id=name, ctx=gast.Param(), annotation=None, type_comment=None) for name in nonlocal_names],
                 posonlyargs=[],
                 vararg=None,
                 kwonlyargs=[],
@@ -621,26 +614,19 @@ class LoopTransformer(BaseTransformer):
                 kwarg=None,
                 defaults=[],
             ),
-            body=nonlocal_stmt_node + body_stmts,
+            body=body_stmts,
             decorator_list=[],
             returns=None,
             type_comment=None,
         )
         new_stmts.append(body_func_node)
 
-        helper = GetterSetterHelper(None, None, nonlocal_names, push_pop_names)
-        get_args_node = create_get_args_node(helper.union())
-        set_args_node = create_set_args_node(helper.union())
         # 7. create & append while loop node
         while_loop_nodes = create_while_nodes(
             condition_func_node.name,
             body_func_node.name,
             nonlocal_names,
-            push_pop_names,
-            get_args_node.name,
-            set_args_node.name,
         )
-        new_stmts.extend([get_args_node, set_args_node])
         new_stmts.extend(while_loop_nodes)
 
         return new_stmts
@@ -654,13 +640,11 @@ class LoopTransformer(BaseTransformer):
         new_stmts = []
 
         # create non-local statement for body and cond.
-        nonlocal_names = list(loop_var_names | create_var_names)
+        nonlocal_names = list(loop_var_names | create_var_names | set(push_pop_names))
         nonlocal_names.sort()
         # TODO(dev): Need a better way to deal this.
         if ARGS_NAME in nonlocal_names:
             nonlocal_names.remove(ARGS_NAME)
-
-        nonlocal_stmt_node = create_nonlocal_stmt_nodes(nonlocal_names)
 
         # Python can create variable in loop and use it out of loop, E.g.
         #
@@ -675,7 +659,7 @@ class LoopTransformer(BaseTransformer):
         condition_func_node = gast.FunctionDef(
             name=unique_name.generate(WHILE_CONDITION_PREFIX),
             args=gast.arguments(
-                args=[],
+                args=[gast.Name(id=name, ctx=gast.Param(), annotation=None, type_comment=None) for name in nonlocal_names],
                 posonlyargs=[],
                 vararg=None,
                 kwonlyargs=[],
@@ -683,7 +667,7 @@ class LoopTransformer(BaseTransformer):
                 kwarg=None,
                 defaults=[],
             ),
-            body=nonlocal_stmt_node + [gast.Return(value=node.test)],
+            body=[gast.Return(value=node.test)],
             decorator_list=[],
             returns=None,
             type_comment=None,
@@ -695,7 +679,7 @@ class LoopTransformer(BaseTransformer):
         body_func_node = gast.FunctionDef(
             name=unique_name.generate(WHILE_BODY_PREFIX),
             args=gast.arguments(
-                args=[],
+                args=[gast.Name(id=name, ctx=gast.Param(), annotation=None, type_comment=None) for name in nonlocal_names],
                 posonlyargs=[],
                 vararg=None,
                 kwonlyargs=[],
@@ -703,25 +687,17 @@ class LoopTransformer(BaseTransformer):
                 kwarg=None,
                 defaults=[],
             ),
-            body=nonlocal_stmt_node + new_body,
+            body=new_body,
             decorator_list=[],
             returns=None,
             type_comment=None,
         )
         new_stmts.append(body_func_node)
 
-        helper = GetterSetterHelper(None, None, nonlocal_names, push_pop_names)
-        get_args_node = create_get_args_node(helper.union())
-        set_args_node = create_set_args_node(helper.union())
-
         while_loop_nodes = create_while_nodes(
             condition_func_node.name,
             body_func_node.name,
             nonlocal_names,
-            push_pop_names,
-            get_args_node.name,
-            set_args_node.name,
         )
-        new_stmts.extend([get_args_node, set_args_node])
         new_stmts.extend(while_loop_nodes)
         return new_stmts

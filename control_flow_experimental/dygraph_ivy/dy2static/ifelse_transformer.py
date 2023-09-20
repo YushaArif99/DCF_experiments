@@ -18,6 +18,7 @@ from control_flow_experimental.dygraph_ivy.dy2static.utils import (
     create_get_args_node,
     create_name_str,
     create_nonlocal_stmt_nodes,
+    create_dict_node,
     create_set_args_node,
 )
 
@@ -28,7 +29,7 @@ from control_flow_experimental.dygraph_ivy.dy2static.utils import (
 from ..utils import gast
 
 from .base_transformer import BaseTransformer
-from .utils import FALSE_FUNC_PREFIX, TRUE_FUNC_PREFIX
+from .utils import FALSE_FUNC_PREFIX, TRUE_FUNC_PREFIX, PRED_FUNC_PREFIX
 
 __all__ = []
 
@@ -56,28 +57,22 @@ class IfElseTransformer(BaseTransformer):
 
     def visit_If(self, node):
         self.generic_visit(node)
-        (
+        (   
+            pred_func_node,
             true_func_node,
             false_func_node,
-            get_args_node,
-            set_args_node,
-            return_name_ids,
-            push_pop_ids,
+            cond_vars,
         ) = transform_if_else(node, self.root)
 
         new_node = create_convert_ifelse_node(
-            return_name_ids,
-            push_pop_ids,
-            node.test,
+            cond_vars,
+            pred_func_node,
             true_func_node,
             false_func_node,
-            get_args_node,
-            set_args_node,
         )
 
         return [
-            get_args_node,
-            set_args_node,
+            pred_func_node,
             true_func_node,
             false_func_node,
         ] + [new_node]
@@ -322,7 +317,7 @@ def transform_if_else(node, root):
     # TODO(liym27): Consider variable like `self.a` modified in if/else node.
     return_name_ids = sorted(node.ivy_scope.modified_vars())
     push_pop_ids = sorted(node.ivy_scope.variadic_length_vars())
-    nonlocal_names = list(return_name_ids)
+    nonlocal_names = list(return_name_ids + push_pop_ids)
     nonlocal_names.sort()
     # NOTE: All var in return_name_ids should be in nonlocal_names.
     nonlocal_names = _valid_nonlocal_names(return_name_ids, nonlocal_names)
@@ -348,12 +343,10 @@ def transform_if_else(node, root):
         return True
 
     nonlocal_names = list(filter(remove_if, nonlocal_names))
-    return_name_ids = nonlocal_names
+    cond_vars = nonlocal_names
 
-    nonlocal_stmt_node = create_nonlocal_stmt_nodes(nonlocal_names)
-
-    empty_arg_node = gast.arguments(
-        args=[],
+    arg_node = gast.arguments(
+        args=[gast.Name(id=name, ctx=gast.Param(), annotation=None, type_comment=None) for name in nonlocal_names],
         posonlyargs=[],
         vararg=None,
         kwonlyargs=[],
@@ -362,70 +355,62 @@ def transform_if_else(node, root):
         defaults=[],
     )
 
-    true_func_node = create_funcDef_node(
-        nonlocal_stmt_node + node.body,
-        name=unique_name.generate(TRUE_FUNC_PREFIX),
-        input_args=empty_arg_node,
+    
+    pred_func_node = create_funcDef_node(
+        [gast.Return(value=node.test)],
+        name=unique_name.generate(PRED_FUNC_PREFIX),
+        input_args=arg_node,
         return_name_ids=[],
+    )
+    true_func_node = create_funcDef_node(
+        node.body,
+        name=unique_name.generate(TRUE_FUNC_PREFIX),
+        input_args=arg_node,
+        return_name_ids=cond_vars,
     )
     false_func_node = create_funcDef_node(
-        nonlocal_stmt_node + node.orelse,
+        node.orelse,
         name=unique_name.generate(FALSE_FUNC_PREFIX),
-        input_args=empty_arg_node,
-        return_name_ids=[],
+        input_args=arg_node,
+        return_name_ids=cond_vars,
     )
 
-    helper = GetterSetterHelper(None, None, nonlocal_names, push_pop_ids)
-    get_args_node = create_get_args_node(helper.union())
-    set_args_node = create_set_args_node(helper.union())
-
     return (
+        pred_func_node,
         true_func_node,
         false_func_node,
-        get_args_node,
-        set_args_node,
-        return_name_ids,
-        push_pop_ids,
+        cond_vars,
     )
 
 
 def create_convert_ifelse_node(
-    return_name_ids,
-    push_pop_ids,
-    pred,
+    cond_vars,
+    pred_func,
     true_func,
     false_func,
-    get_args_func,
-    set_args_func,
     is_if_expr=False,
 ):
     """
     Create `control_flow_experimental.dygraph.dygraph_to_static.convert_ifelse(
-            pred, true_fn, false_fn, get_args, set_args, return_name_ids)`
+            pred, true_fn, false_fn, dict_vars)`
     to replace original `python if/else` statement.
     """
     if is_if_expr:
         true_func_source = f"lambda : {ast_to_source_code(true_func)}"
         false_func_source = f"lambda : {ast_to_source_code(false_func)}"
     else:
+        pred_func_source = pred_func.name
         true_func_source = true_func.name
         false_func_source = false_func.name
 
-    convert_ifelse_layer = gast.parse(
-        'ivy.IfElse('
-        '{pred}, {true_fn}, {false_fn}, {get_args}, {set_args}, {return_name_ids}, push_pop_names={push_pop_ids})'.format(
-            pred=ast_to_source_code(pred),
+    convert_ifelse_fn = gast.parse(
+        'ivy.if_else('
+        '{pred}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
+            pred=pred_func_source,
             true_fn=true_func_source,
             false_fn=false_func_source,
-            get_args=get_args_func.name
-            if not is_if_expr
-            else 'lambda: None',  # TODO: better way to deal with this
-            set_args=set_args_func.name
-            if not is_if_expr
-            else 'lambda args: None',
-            return_name_ids=create_name_str(return_name_ids),
-            push_pop_ids=create_name_str(push_pop_ids),
+            dict_vars=ast_to_source_code(create_dict_node(cond_vars)),
         )
     ).body[0]
 
-    return convert_ifelse_layer
+    return convert_ifelse_fn
