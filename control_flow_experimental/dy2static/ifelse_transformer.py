@@ -78,23 +78,20 @@ class IfElseTransformer(BaseTransformer):
             false_func_node,
         ] + [new_node]
 
-    def visit_Call(self, node):
-        # Remove `numpy()` statement, like `Tensor.numpy()[i]` -> `Tensor[i]`
-        if isinstance(node.func, gast.Attribute):
-            attribute = node.func
-            if attribute.attr == 'numpy':
-                node = attribute.value
-        self.generic_visit(node)
-        return node
-
     def visit_IfExp(self, node):
         """
         Transformation with `true_fn(x) if Tensor > 0 else false_fn(x)`
         """
         self.generic_visit(node)
-
+        # ifexp nodes dont contain any modified vars hence liveness analyses
+        # returns an empty set. However, we still would like to lower it to an 
+        # ivy.if_else op and so we need to know the variables used in the expr.
+        # A simple solution is to walk the ast.Expr node and access all gast.Name nodes
+        visitor = NameVisitor()
+        visitor.visit(node)
+        ifexpr_vars = list(visitor.name_ids.keys())
         new_node = create_convert_ifelse_node(
-            None, None, node.test, node.body, node.orelse, None, None, True
+            ifexpr_vars, node.test, node.body, node.orelse, True
         )
         # Note: A blank line will be added separately if transform gast.Expr
         # into source code. Using gast.Expr.value instead to avoid syntax error
@@ -104,6 +101,9 @@ class IfElseTransformer(BaseTransformer):
 
         return new_node
 
+
+
+    
 
 class NameVisitor(gast.NodeVisitor):
     def __init__(self, after_node=None, end_node=None):
@@ -181,6 +181,32 @@ class NameVisitor(gast.NodeVisitor):
                         before_if_name_ids[new_name_id].append(gast.Store())
 
                     self.name_ids = before_if_name_ids
+
+    def visit_IfExp(self, node):
+        if not self._in_range:
+            self.generic_visit(node)
+            return
+        else:
+            before_ifexp_name_ids = copy.deepcopy(self.name_ids)
+
+            test_name_ids = self._visit_child(node.test)
+            body_name_ids = self._visit_child(node.body)
+            # If traversal process stops early in `if.body`, return the currently seen name_ids.
+            if not self._in_range:
+                self._update_name_ids(before_ifexp_name_ids)
+            else:
+                else_name_ids = self._visit_child(node.orelse)
+                # If traversal process stops early in `if.orelse`, return the currently seen name_ids.
+                if not self._in_range:
+                    self._update_name_ids(before_ifexp_name_ids)
+                else:
+                    # Blocks the vars in `if.body` and only inserts the vars both created in 'if/else' branch
+                    # into name_ids.
+                    new_name_ids = set(test_name_ids.keys()) | set(body_name_ids.keys()) | set(else_name_ids.keys())
+                    for new_name_id in new_name_ids:
+                        before_ifexp_name_ids[new_name_id].append(gast.Load())
+
+                    self.name_ids = before_ifexp_name_ids
 
     def visit_Attribute(self, node):
         if not self._in_range or not self._is_call_func_name_node(node):
@@ -397,22 +423,28 @@ def create_convert_ifelse_node(
     to replace original `python if/else` statement.
     """
     if is_if_expr:
-        true_func_source = f"lambda : {ast_to_source_code(true_func)}"
-        false_func_source = f"lambda : {ast_to_source_code(false_func)}"
-    else:
-        pred_func_source = pred_func.name
-        true_func_source = true_func.name
-        false_func_source = false_func.name
-
-    convert_ifelse_fn = gast.parse(
-        '{tuple_vars} = ivy.if_else('
-        '{pred}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
-            tuple_vars =ast_to_source_code(create_tuple_node(cond_vars)).strip('\n'),
-            pred=pred_func_source,
+        lambda_args = ', '.join(v for v in cond_vars)
+        pred_func_source = 'lambda {lambda_args}: {pred_fn}'.format(lambda_args=lambda_args, pred_fn=ast_to_source_code(pred_func))
+        true_func_source = 'lambda {lambda_args}: {true_fn}'.format(lambda_args=lambda_args, true_fn=ast_to_source_code(true_func))
+        false_func_source = 'lambda {lambda_args}: {false_fn}'.format(lambda_args=lambda_args, false_fn=ast_to_source_code(false_func))
+        convert_ifelse_fn ='ivy.if_else({pred_fn}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
+            pred_fn=pred_func_source,
             true_fn=true_func_source,
             false_fn=false_func_source,
             dict_vars=ast_to_source_code(create_dict_node(cond_vars)),
         )
-    ).body[0]
+    else:
+        pred_func_source = pred_func.name
+        true_func_source = true_func.name
+        false_func_source = false_func.name
+        convert_ifelse_fn = '{tuple_vars} = ivy.if_else({pred_fn}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
+            tuple_vars =ast_to_source_code(create_tuple_node(cond_vars)).strip('\n'),
+            pred_fn=pred_func_source,
+            true_fn=true_func_source,
+            false_fn=false_func_source,
+            dict_vars=ast_to_source_code(create_dict_node(cond_vars)),
+        )
+
+    convert_ifelse_fn = gast.parse(convert_ifelse_fn).body[0]
 
     return convert_ifelse_fn
