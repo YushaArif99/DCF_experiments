@@ -25,13 +25,12 @@ def cmpop_node_to_str(node):
 
 class LogicalTransformer(BaseTransformer):
     """
-    Transform python boolean op into Ivy logical op.
-
+    Transform python boolean op into functional ops.
     For example:
         a = x > 1 and y < 1
 
     Transformed code:
-        a = cfe.And(lambda:x>1, lambda:y<1)
+        a = cfe.bool_and( cfe.cmp_gt(x,1), cfe.cmp_lt(y,1) )
     """
 
     def __init__(self, root):
@@ -40,53 +39,57 @@ class LogicalTransformer(BaseTransformer):
     def transform(self):
         return self.visit(self.root)
 
-    def visit_UnaryOp(self, node):
-        self.generic_visit(node)
-        if isinstance(node.op, gast.Not):
-            arg = ast_to_source_code(node.operand)
-            new_node_str = f"cfe.Not({arg})"
-            # NOTE: gast.parse returns Module(body=[expr(value=...)])
-            new_node = gast.parse(new_node_str).body[0].value
-            return new_node
-        return node
-
     def visit_BoolOp(self, node):
         self.generic_visit(node)
         if isinstance(node.op, gast.And):
-            new_node = self._create_bool_op_node(node.values, 'And')
+            new_node = self._create_bool_op_node(node.values, 'bool_and')
         elif isinstance(node.op, gast.Or):
-            new_node = self._create_bool_op_node(node.values, 'Or')
+            new_node = self._create_bool_op_node(node.values, 'bool_or')
         else:
             raise TypeError(
                 "Only supports and/or syntax in control flow if statement."
             )
         return new_node
 
-    def _create_bool_op_node(self, nodes, api_type):
-        '''
-        NOTE:
-           The arguments of function convert_logical_XX should be callable so that they can be run
-          according to the actual order. In `convert_logical_and(lambda:x>1, lambda:y<1)`, `lambda:y<1`
-          must be run after `lambda:x>1`, If `x>1` is False, `y<1` should NOT be run.
-        '''
-        assert (
-            len(nodes) > 1
-        ), "The length of BoolOp should be at least 2, but received {}.".format(
-            len(nodes)
-        )
-        if len(nodes) > 2:
-            # Creates logic_and/logic_or node recursively.
-            pre_logic_node = self._create_bool_op_node(nodes[:2], api_type)
-            if len(nodes[2:]) == 1:
-                post_logic_node = nodes[2]
-            else:
-                post_logic_node = self._create_bool_op_node(nodes[2:], api_type)
-            nodes = [pre_logic_node] + [post_logic_node]
+    def visit_Compare(self, node):
+        self.generic_visit(node)
+        ops_map = {
+            gast.Gt: 'cmp_gt',
+            gast.Lt: 'cmp_lt',
+            gast.GtE: 'cmp_ge',
+            gast.LtE: 'cmp_le',
+            gast.Eq: 'cmp_eq',
+            gast.NotEq: 'cmp_ne',
+            gast.In: 'cmp_in',
+            gast.NotIn: 'cmp_notin',
+            gast.Is: 'cmp_is',
+            gast.IsNot: 'cmp_isnot'
+        }
+        op_func = ops_map[type(node.ops[0])]
+        new_node = self._create_cmp_op_node(node.left, node.comparators[0], op_func)
+        for op, comparator in zip(node.ops[1:], node.comparators[1:]):
+            op_func = ops_map[type(op)]
+            new_node = self._create_cmp_op_node(new_node, comparator, op_func)
+        return new_node
 
+    def visit_UnaryOp(self, node):
+        self.generic_visit(node)
+        if isinstance(node.op, gast.Not):
+            arg = ast_to_source_code(node.operand)
+            new_node_str = f"cfe.unary_not({arg})"
+            new_node = gast.parse(new_node_str).body[0].value
+            return new_node
+        return node
+
+    def _create_bool_op_node(self, nodes, api_type):
         args = [ast_to_source_code(child) for child in nodes]
-        new_node_str = "cfe.{}(lambda:{}, lambda:{})".format(
-            api_type, args[0], args[1]
-        )
-        # NOTE: gast.parse return Module(body=[expr(...)])
+        new_node_str = "cfe.{}({}, {})".format(api_type, args[0], args[1])
+        new_node = gast.parse(new_node_str).body[0].value
+        return new_node
+
+    def _create_cmp_op_node(self, left, right, api_type):
+        left_arg = ast_to_source_code(left)
+        right_arg = ast_to_source_code(right)
+        new_node_str = "cfe.{}({}, {})".format(api_type, left_arg, right_arg)
         new_node = gast.parse(new_node_str).body[0].value
         return new_node
