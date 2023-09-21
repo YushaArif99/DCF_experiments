@@ -1,7 +1,7 @@
 import re
 import warnings
 
-from ..utils import gast
+from .helpers import gast
 
 from .base_transformer import BaseTransformer
 from .utils import RE_PYMODULE, RE_PYNAME, ast_to_source_code

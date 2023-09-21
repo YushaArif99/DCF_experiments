@@ -1,5 +1,5 @@
-from control_flow_experimental.dygraph_ivy.dy2static.utils import ast_to_source_code
-from control_flow_experimental.dygraph_ivy.utils import gast
+from control_flow_experimental.dy2static.utils import ast_to_source_code
+from control_flow_experimental.dy2static.utils import gast
 from .base_transformer import BaseTransformer
 
 __all__ = []

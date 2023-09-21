@@ -1,7 +1,7 @@
-from ..utils import unique_name
-from control_flow_experimental.dygraph_ivy.dy2static.utils import BaseNodeVisitor, index_in_list
-from control_flow_experimental.dygraph_ivy.dy2static.variable_trans_func import create_bool_node
-from ..utils import gast
+from .helpers import unique_name
+from control_flow_experimental.dy2static.utils import BaseNodeVisitor, index_in_list
+from control_flow_experimental.dy2static.variable_trans_func import create_bool_node
+from .helpers import gast
 
 from .base_transformer import BaseTransformer, ForNodeVisitor
 

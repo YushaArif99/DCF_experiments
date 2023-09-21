@@ -1,5 +1,5 @@
-from ..utils import unique_name
-from control_flow_experimental.dygraph_ivy.dy2static.utils import (
+from .helpers import unique_name
+from control_flow_experimental.dy2static.utils import (
     FOR_ITER_INDEX_PREFIX,
     FOR_ITER_ITERATOR_PREFIX,
     FOR_ITER_TARGET_PREFIX,
@@ -11,7 +11,7 @@ from control_flow_experimental.dygraph_ivy.dy2static.utils import (
     create_assign_node,
     get_attribute_full_name,
 )
-from ..utils import gast
+from .helpers import gast
 
 __all__ = []
 

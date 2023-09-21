@@ -1,4 +1,4 @@
-from ..utils import gast
+from .helpers import gast
 
 from .base_transformer import BaseTransformer
 from .utils import ast_to_source_code

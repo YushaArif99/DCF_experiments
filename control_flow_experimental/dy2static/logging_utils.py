@@ -1,7 +1,7 @@
 import os
 import threading
 
-from ..utils import log_helper
+from .helpers import log_helper
 
 from .ast_utils import ast_to_source_code
 

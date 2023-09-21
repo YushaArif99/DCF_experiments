@@ -6,7 +6,7 @@ from .origin_info import (
     attach_origin_info,
     create_and_update_origin_info_map,
 )
-from ..utils import gast
+from .helpers import gast
 from .utils import (
     ALREADY_D2S,
     ast_to_func,

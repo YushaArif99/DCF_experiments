@@ -1,5 +1,5 @@
 from .utils import ast_to_source_code, is_ivy_api, is_native_backend_api, is_internal_api
-from ..utils import gast
+from .helpers import gast
 
 from .base_transformer import BaseTransformer
 from .utils import is_builtin  # noqa: F401

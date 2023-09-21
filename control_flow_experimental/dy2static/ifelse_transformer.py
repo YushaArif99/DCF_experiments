@@ -1,8 +1,8 @@
 import copy
 from collections import defaultdict
 
-from ..utils import unique_name
-from control_flow_experimental.dygraph_ivy.dy2static.utils import (
+from .helpers import unique_name
+from control_flow_experimental.dy2static.utils import (
     FOR_ITER_INDEX_PREFIX,
     FOR_ITER_ITERATOR_PREFIX,
     FOR_ITER_TARGET_PREFIX,
@@ -27,7 +27,7 @@ from control_flow_experimental.dygraph_ivy.dy2static.utils import (
 # It provides a compatibility layer between the AST of various Python versions,
 # as produced by ast.parse from the standard ast module.
 # See details in https://github.com/serge-sans-paille/gast/
-from ..utils import gast
+from .helpers import gast
 
 from .base_transformer import BaseTransformer
 from .utils import FALSE_FUNC_PREFIX, TRUE_FUNC_PREFIX, PRED_FUNC_PREFIX

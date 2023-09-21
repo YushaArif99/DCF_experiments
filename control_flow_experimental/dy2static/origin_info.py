@@ -1,7 +1,7 @@
 import inspect
 from collections.abc import Sequence
 
-from ..utils import gast
+from .helpers import gast
 
 from .utils import ORIGI_INFO, unwrap
 

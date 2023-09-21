@@ -2,7 +2,7 @@ import ast
 
 import astor
 
-from ..utils import gast
+from .helpers import gast
 
 
 def ast_to_source_code(ast_node):

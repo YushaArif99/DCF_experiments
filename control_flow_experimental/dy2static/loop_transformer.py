@@ -1,8 +1,8 @@
 import copy
 from collections import defaultdict
 
-from ..utils import unique_name
-from ..utils import gast
+from .helpers import unique_name
+from .helpers import gast
 
 from .base_transformer import (
     BaseTransformer,

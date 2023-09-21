@@ -16,8 +16,8 @@ from importlib.machinery import SourceFileLoader
 import astor
 import numpy as np
 
-from ..utils import unique_name
-from ..utils import gast
+from .helpers import unique_name
+from .helpers import gast
 
 from .ast_utils import ast_to_source_code
 from .static_analysis import StaticAnalysisVisitor
@@ -366,7 +366,7 @@ def _inject_import_statements():
     backend_import = ivy.current_backend_str()
     import_statements = [
         "import ivy",
-        "import control_flow_experimental.dygraph_ivy.dy2static as cfe",
+        "import control_flow_experimental.dy2static as cfe",
         "import control_flow_experimental.ivy_fx.fx as fx",
         "from typing import *",
         "import numpy as np",

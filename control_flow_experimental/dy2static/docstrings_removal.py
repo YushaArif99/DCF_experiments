@@ -1,5 +1,5 @@
 from .base_transformer import BaseTransformer
-from ..utils import gast
+from .helpers import gast
 __all__ = []
 
 class DocstringTransformer(BaseTransformer):
