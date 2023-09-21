@@ -117,20 +117,11 @@ def _wrap_into_factory(nodes, entity_name, inner_factory_name,
             for name in factory_args
     ]
 
-    # Create a list of nodes for the wrap function calls
-    wrap_calls = []
-    for name in ['len', 'min', 'max', 'range']: 
-        template = """
-            fx.wrap(name, dynamic=True)
-        """
-        wrap_calls.extend(templates.replace(template, name=name))
-
     template = """
         future_imports
         def outer_factory_name():
             dummy_closure_defs
             def inner_factory_name(factory_args):
-                wrap_calls
                 entity_defs
                 return entity_name
             return inner_factory_name
@@ -143,8 +134,7 @@ def _wrap_into_factory(nodes, entity_name, inner_factory_name,
             factory_args=factory_args,
             future_imports=future_imports,
             inner_factory_name=inner_factory_name,
-            outer_factory_name=outer_factory_name,
-            wrap_calls=wrap_calls)
+            outer_factory_name=outer_factory_name)
 
 
 class _PythonFnFactory(object):
@@ -286,7 +276,7 @@ class GenericTranspiler(object):
         Raises:
             NotImplementedError: if the type of obj is not handled.
         """
-        if inspect.isfunction(obj) or inspect.ismethod(obj) or isinstance(obj, str):
+        if inspect.isfunction(obj) or inspect.ismethod(obj):
             return self.transform_function(obj, user_context)
 
         raise NotImplementedError('Non-function: {}'.format(type(obj)))
@@ -348,6 +338,7 @@ class GenericTranspiler(object):
         """
         future_features = inspect_utils.getfutureimports(fn)
         node, source = parser.parse_entity(fn, future_features=future_features)
+
         if not hasattr(fn, "source_code"):
             origin_info.resolve_entity(node, source, fn)
 

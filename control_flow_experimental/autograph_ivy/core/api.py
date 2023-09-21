@@ -29,12 +29,9 @@ from control_flow_experimental.autograph_ivy.converters import control_flow
 from control_flow_experimental.autograph_ivy.converters import functions
 from control_flow_experimental.autograph_ivy.converters import return_statements
 from control_flow_experimental.autograph_ivy.converters import list_comprehensions
-from control_flow_experimental.autograph_ivy.converters import boolean_operators
-from control_flow_experimental.autograph_ivy.converters import builtins_type_casts
 from control_flow_experimental.autograph_ivy.converters import lists
 from control_flow_experimental.autograph_ivy.converters import slices
 import control_flow_experimental.autograph_ivy.core.list_ops as list_ops
-import control_flow_experimental.autograph_ivy.core.ast_transforms as ast_transforms
 from control_flow_experimental.autograph_ivy.core import unsupported_features_checker
 from control_flow_experimental.autograph_ivy.pyct import anno
 from control_flow_experimental.autograph_ivy.pyct import cfg
@@ -42,15 +39,7 @@ from control_flow_experimental.autograph_ivy.pyct import inspect_utils
 from control_flow_experimental.autograph_ivy.pyct import qual_names
 from control_flow_experimental.autograph_ivy.pyct import transpiler
 from control_flow_experimental.autograph_ivy.pyct.static_analysis import activity
-from control_flow_experimental.autograph_ivy.pyct.static_analysis import (
-    reaching_definitions,
-)
-from control_flow_experimental.autograph_ivy.core import converter
-from control_flow_experimental.autograph_ivy.core import function_wrappers
-import control_flow_experimental as cfe
-import control_flow_experimental.ivy_fx.fx as fx
-from control_flow_experimental.ivy_fx.fx.proxy import Proxy
-import graph_compiler.globals as glob
+from control_flow_experimental.autograph_ivy.pyct.static_analysis import reaching_definitions
 
 
 # Actual source code transformation
@@ -64,22 +53,19 @@ class PyToIvy(transpiler.PyToPy):
         self._extra_locals = None
 
     def get_transformed_name(self, node):
-        return "ivy__" + super(PyToIvy, self).get_transformed_name(node)
+        return 'ivy__' + super(PyToIvy, self).get_transformed_name(node)
 
     def get_extra_locals(self):
         if self._extra_locals is None:
             # TODO(mdan): Move into core or replace with an actual importable module.
             # Craft a module that exposes the external API as well as certain
             # internal modules.
-            module_spec = importlib.machinery.ModuleSpec("autograph_ivy", None)
+            module_spec = importlib.machinery.ModuleSpec('autograph_ivy', None)
             ag_internal = importlib.util.module_from_spec(module_spec)
             ag_internal.__dict__.update(inspect.getmodule(PyToIvy).__dict__)
-            ag_internal.__dict__.update(list_ops.__dict__) 
-            ag_internal.__dict__.update(ast_transforms.__dict__)
-            ag_internal.__dict__.update(converter.__dict__)
-            ag_internal.__dict__.update(function_wrappers.__dict__)
+            ag_internal.__dict__.update(list_ops.__dict__)
             # TODO(mdan): Add safeguards against name clashes.
-            self._extra_locals = {"ivy__": ag_internal, "ivy": ivy, "fx": fx, 'cfe':cfe}
+            self._extra_locals = {'ivy__': ag_internal, 'ivy': ivy}
         return self._extra_locals
 
     def initial_analysis(self, node, ctx):
@@ -88,10 +74,10 @@ class PyToIvy(transpiler.PyToPy):
         node = activity.resolve(node, ctx, None)
         node = reaching_definitions.resolve(node, ctx, graphs)
         anno.dup(
-            node,
-            {
-                anno.Static.DEFINITIONS: anno.Static.ORIG_DEFINITIONS,
-            },
+                node,
+                {
+                        anno.Static.DEFINITIONS: anno.Static.ORIG_DEFINITIONS,
+                },
         )
         return node
 
@@ -106,25 +92,20 @@ class PyToIvy(transpiler.PyToPy):
         # canonicalization creates.
         node = continue_statements.transform(node, ctx)
         node = return_statements.transform(node, ctx)
-        # node = lists.transform(node, ctx)
-        # node = slices.transform(node, ctx)
+        #node = lists.transform(node, ctx)
+        #node = slices.transform(node, ctx)
         node = call_trees.transform(node, ctx)
         node = control_flow.transform(node, ctx)
-        # node = conditional_expressions.transform(node, ctx)
+        node = conditional_expressions.transform(node, ctx)
         node = list_comprehensions.transform(node, ctx)
-        node = boolean_operators.transform(node, ctx)
-        node = builtins_type_casts.transform(node, ctx)
         return node
 
 
 def return_none_or_val(retval, do_return):
-    if isinstance(do_return, Proxy):
-        return retval
     if do_return:
         return retval
     else:
         return None
-
 
 def _is_of_known_loaded_module(f, module_name):
     mod = sys.modules.get(module_name, None)
@@ -137,9 +118,8 @@ def _is_of_known_loaded_module(f, module_name):
 
 def _is_known_loaded_type(f, module_name, entity_name):
     """Tests whether the function or method is an instance of a known type."""
-    if module_name not in sys.modules or not hasattr(
-        sys.modules[module_name], entity_name
-    ):
+    if (module_name not in sys.modules or
+            not hasattr(sys.modules[module_name], entity_name)):
         return False
     type_entity = getattr(sys.modules[module_name], entity_name)
     if isinstance(f, type_entity):
@@ -166,36 +146,29 @@ def _is_known_loaded_type(f, module_name, entity_name):
 def is_unsupported(o):
     """Checks whether an entity is supported."""
 
-    builtin_modules = [
-        "logging",
-    ]
-    if _is_known_loaded_type(o, "functools", "_lru_cache_wrapper"):
+
+    if _is_known_loaded_type(o, 'functools', '_lru_cache_wrapper'):
         return True
 
     if inspect_utils.isconstructor(o):
         return True
 
-    if any(_is_of_known_loaded_module(o, m) for m in (builtin_modules)):
-        return True
-
-    if inspect.isbuiltin(o):
-        return True
-
-    # TODO (yusha): find a more cleaner fix for this filtering
-    if not o.__module__ or o.__module__.__contains__("ivy.utils"):
+    if any(
+            _is_of_known_loaded_module(o, m)
+            for m in ('ivy', 'torch', 'tf', 'jax', 'haiku', 'paddle')):
         return True
 
     return False
-
 
 def is_user_defined(func):
     # Check if the function is a built-in function
     if inspect.isbuiltin(func):
         return False
-    if hasattr(func, "__module__"):
-        # Check if the function is one of the specified functions
-        if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
-            return False
+
+    # Check if the function is one of the specified functions
+    if func.__module__ in ["ivy", "tf", "torch", "jax", "haiku", "paddle"]:
+        return False
+
     # If none of the above conditions are met, the function is user-defined
     return True
 
@@ -236,17 +209,13 @@ def converted_call(f, args, kwargs):
             new_kwargs.update(kwargs)
         new_args = f.args + args
         return converted_call(
-            f.func,
-            new_args,
-            new_kwargs,
+                f.func,
+                new_args,
+                new_kwargs,
         )
-
+    
     # If the function is wrapped, we don't need to go inside of it.
-    if (
-        is_user_defined(f)
-        or hasattr(f, "wrapped_for_compiling")
-        or hasattr(f, "wrapped_for_tracing")
-    ):
+    if is_user_defined(f) or hasattr(f, "wrapped_for_compiling"):
         if kwargs:
             return f(*args, **kwargs)
         else:
@@ -255,15 +224,6 @@ def converted_call(f, args, kwargs):
     if is_unsupported(f):
         return _call_unconverted(f, args, kwargs)
 
-    # for dummy tracing
-    if f.__name__ in glob.DUMMY_PLACEHOLDER_FNS:
-        # call the placeholder function in this case
-        placeholder_fn = glob.DUMMY_PLACEHOLDER_FNS[f.__name__]
-        if kwargs:
-            return placeholder_fn(*args, **kwargs)
-        else:
-            return placeholder_fn(*args)
-        ()
     # if inspect_utils.isbuiltin(f) or str(f).__contains__('ivy') or hasattr(f,"__wrapped__"):
     #     if kwargs:
     #         return f(*args, **kwargs)
@@ -274,20 +234,20 @@ def converted_call(f, args, kwargs):
         target_entity = f
         effective_args = args
 
-    elif hasattr(f, "__class__") and hasattr(f.__class__, "__call__"):
+    elif hasattr(f, '__class__') and hasattr(f.__class__, '__call__'):
         target_entity = f.__class__.__call__
         effective_args = (f,) + args
 
     else:
         raise NotImplementedError('unknown callable type "%s"' % type(f))
 
-    if not hasattr(target_entity, "__code__"):
+
+    if not hasattr(target_entity, '__code__'):
         return _call_unconverted(f, args, kwargs)
-    elif (
-        hasattr(target_entity.__code__, "co_filename")
-        and target_entity.__code__.co_filename == "<string>"
-    ):
+    elif (hasattr(target_entity.__code__, 'co_filename') and
+                target_entity.__code__.co_filename == '<string>'):
         return _call_unconverted(f, args, kwargs)
+
     converted_f = to_functional_form(target_entity)
     if kwargs is not None:
         result = converted_f(*effective_args, **kwargs)
@@ -310,36 +270,23 @@ def _call_unconverted(f, args, kwargs):
 
 def to_functional_form(entity, program_ctx=None):
     """Applies autograph_ivy to entity."""
-    if program_ctx is None:
-            program_ctx = converter.ProgramContext(
-                options=converter.ConversionOptions(user_requested=True)
-        )
+
     if isinstance(entity, (BuiltinFunctionType, BuiltinMethodType)):
         return entity
 
-    functionlike = (
-        FunctionType,
-        MethodType,
-    )
-    if (
-        hasattr(entity, "__call__")
-        and callable(entity)
-        and not isinstance(entity, functionlike)
-    ):
+    functionlike = (FunctionType, MethodType,)
+    if hasattr(entity, "__call__") and callable(entity) and not isinstance(entity, functionlike):
         if entity.__call__ is not entity:
             new_call = to_functional_form(entity.__call__)
-            entity.__call__ = new_call  # doesn't work for some reason
+            entity.__call__ = new_call
             return entity
 
     # TODO(mdan): Put these extra fields inside __autograph_ivy_info__.
-    if not hasattr(entity, "__code__"):
-        raise ValueError(
-            "Cannot apply autograph_ivy to a function that doesn't "
-            "expose a __code__ object. If this is a @tf.function,"
-            " try passing f.python_function instead."
-        )
+    if not hasattr(entity, '__code__'):
+        raise ValueError('Cannot apply autograph_ivy to a function that doesn\'t '
+                                         'expose a __code__ object. If this is a @tf.function,'
+                                         ' try passing f.python_function instead.')
 
-    entity = inspect.unwrap(entity)
     transformed, module, source_map = PyToIvy().transform(entity, program_ctx)
 
     transformed.ivy_module = module
@@ -347,11 +294,9 @@ def to_functional_form(entity, program_ctx=None):
 
     if hasattr(entity, "__self__"):
         original = transformed
-
         @functools.wraps(original)
         def wrapped_transformed(*args, **kwargs):
             return original(entity.__self__, *args, **kwargs)
-
         transformed = wrapped_transformed
 
     return transformed

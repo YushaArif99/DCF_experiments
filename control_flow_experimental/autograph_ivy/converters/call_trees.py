@@ -22,7 +22,6 @@ Requires function_scopes.
 
 import gast
 import builtins
-import astor 
 
 from control_flow_experimental.autograph_ivy.core import converter
 from control_flow_experimental.autograph_ivy.pyct import anno
@@ -118,28 +117,48 @@ class CallTreeTransformer(converter.Base):
             node.body = self.visit_block(node.body)
             if node.returns:
                 node.returns = self.visit(node.returns)
-            # remove the return type definition
-            #node.returns = None
-            # remove all argument annotations
-            for arg_list in [node.args.args, node.args.posonlyargs, node.args.kwonlyargs]:
-                if arg_list:
-                    for arg in arg_list:
-                        arg.annotation = None
-            if node.args.vararg:
-                node.args.vararg.annotation = None
-            if node.args.kwarg:
-                node.args.kwarg.annotation = None
             return node
 
     def visit_With(self, node):
         # Context manager calls (in node.items) are not converted.
         node.body = self.visit_block(node.body)
         return node
-    
+
+    def _args_to_tuple(self, node):
+        """Ties together all positional and *arg arguments in a single tuple."""
+        # TODO(mdan): We could rewrite this to just a call to tuple(). Maybe better?
+        # For example for
+        #     f(a, b, *args)
+        # instead of writing:
+        #     (a, b) + args
+        # just write this?
+        #     tuple(a, b, *args)
+        builder = _ArgTemplateBuilder()
+        for a in node.args:
+            if isinstance(a, gast.Starred):
+                builder.add_stararg(a.value)
+            else:
+                builder.add_arg(a)
+        builder.finalize()
+        return builder.to_ast()
+
+    def _kwargs_to_dict(self, node):
+        """Ties together all keyword and **kwarg arguments in a single dict."""
+        if node.keywords:
+            return gast.Call(
+                    gast.Name(
+                            'dict', ctx=gast.Load(), annotation=None, type_comment=None),
+                    args=(),
+                    keywords=node.keywords)
+        else:
+            return parser.parse_expression('None')
+
     def visit_Call(self, node):
         full_name = str(anno.getanno(node.func, anno.Basic.QN, default=''))
         function_context_name = self.state[_Function].context_name
         node = self.generic_visit(node)
+
+        # TODO(mdan): Refactor converted_call as a 'Call' operator.
 
         # Calls to the function context manager (inserted by function_scopes) are
         # also safe.
@@ -148,128 +167,29 @@ class CallTreeTransformer(converter.Base):
 
         if full_name in builtins.__dict__.keys() or full_name.__contains__("ivy__."):
             return node
+        # Calls to pdb.set_trace or ipdb.set_trace are never converted. We don't use
+        # the normal mechanisms to bypass these literals because they are sensitive
+        # to the frame they are being called from.
 
         if full_name in ('pdb.set_trace', 'ipdb.set_trace', 'breakpoint'):
             global set_trace_warned
             if not set_trace_warned:
                 set_trace_warned = True
             return node
- 
-        new_args = []
-        for a in node.args:
-            if isinstance(a, gast.Starred):
-                template = """
-                    *fx.iter_proxy(arg)
-                """
-                new_arg = templates.replace_as_expression(template, arg=a.value)
-                new_args.append(new_arg)
-            else:
-                new_args.append(a)
-        
-        new_kwargs = []
-        dict_unpacking_args = []
-        for keyword in node.keywords:
-            if keyword.arg is None:
-                template = """
-                    fx.dict_proxy(keyword)
-                """
-                dict_unpacking_args.append(templates.replace_as_expression(template, keyword=keyword.value))
-            else:
-                new_kwargs.append(keyword)
-        
-        # this is a hack of sorts. For some reason creating a gast.Dict node and unparsing it back to
-        # source code isnt working correctly. Might be a compatibility issue with using gast and ast 
-        # together. And so we basically create a patch here by modifying the string representation and
-        # then parsing it into the AST form. 
-        if dict_unpacking_args or new_kwargs:
-            kwargs_strs = []
-            for keyword in new_kwargs:
-                kwargs_strs.append(f"{keyword.arg!r}: {astor.to_source(gast.gast_to_ast(keyword.value)).strip()}")
-            
-            for arg in dict_unpacking_args:
-                kwargs_strs.append(f"**{astor.to_source(gast.gast_to_ast(arg)).strip()}")
-            
-            kwargs_str = "{" + ", ".join(kwargs_strs) + "}"
-            kwargs_ast = gast.parse(kwargs_str, mode='eval').body
-        else:
-            kwargs_ast = parser.parse_expression('None')
 
         template = """
             ivy__.converted_call(func, args, kwargs)
         """
-
         new_call = templates.replace_as_expression(
                 template,
                 func=node.func,
-                args=gast.Tuple(elts=new_args, ctx=gast.Load()),
-                kwargs=kwargs_ast,
+                args=self._args_to_tuple(node),
+                kwargs=self._kwargs_to_dict(node),
         )
 
         return new_call
 
-    # def _args_to_tuple(self, node):
-    #     """Ties together all positional and *arg arguments in a single tuple."""
-    #     # TODO(mdan): We could rewrite this to just a call to tuple(). Maybe better?
-    #     # For example for
-    #     #     f(a, b, *args)
-    #     # instead of writing:
-    #     #     (a, b) + args
-    #     # just write this?
-    #     #     tuple(a, b, *args)
-    #     builder = _ArgTemplateBuilder()
-    #     for a in node.args:
-    #         if isinstance(a, gast.Starred):
-    #             builder.add_stararg(a.value)
-    #         else:
-    #             builder.add_arg(a)
-    #     builder.finalize()
-    #     return builder.to_ast()
 
-    # def _kwargs_to_dict(self, node):
-    #     """Ties together all keyword and **kwarg arguments in a single dict."""
-    #     if node.keywords:
-    #         return gast.Call(
-    #                 gast.Name(
-    #                         'dict', ctx=gast.Load(), annotation=None, type_comment=None),
-    #                 args=(),
-    #                 keywords=node.keywords)
-    #     else:
-    #         return parser.parse_expression('None')
-    # def visit_Call(self, node):
-    #     full_name = str(anno.getanno(node.func, anno.Basic.QN, default=''))
-    #     function_context_name = self.state[_Function].context_name
-    #     node = self.generic_visit(node)
-
-    #     # TODO(mdan): Refactor converted_call as a 'Call' operator.
-
-    #     # Calls to the function context manager (inserted by function_scopes) are
-    #     # also safe.
-    #     if full_name.startswith(function_context_name + '.'):
-    #         return node
-
-    #     if full_name in builtins.__dict__.keys() or full_name.__contains__("ivy__."):
-    #         return node
-    #     # Calls to pdb.set_trace or ipdb.set_trace are never converted. We don't use
-    #     # the normal mechanisms to bypass these literals because they are sensitive
-    #     # to the frame they are being called from.
-
-    #     if full_name in ('pdb.set_trace', 'ipdb.set_trace', 'breakpoint'):
-    #         global set_trace_warned
-    #         if not set_trace_warned:
-    #             set_trace_warned = True
-    #         return node
-
-    #     template = """
-    #         ivy__.converted_call(func, args, kwargs)
-    #     """
-    #     new_call = templates.replace_as_expression(
-    #             template,
-    #             func=node.func,
-    #             args=self._args_to_tuple(node),
-    #             kwargs=self._kwargs_to_dict(node),
-    #     )
-
-    #     return new_call
 def transform(node, ctx):
     """Transform function call to the compiled counterparts.
 
