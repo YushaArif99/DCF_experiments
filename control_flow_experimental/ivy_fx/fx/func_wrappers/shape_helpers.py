@@ -16,7 +16,7 @@ def _shape_to_native(x):
         if (isinstance(x, (list, tuple)) and len(x) > 0) and (
             isinstance(x[0], ivy.Shape) and ivy.array_mode
         ):
-            x = ivy.nested_map(x, lambda x: x.shape if isinstance(x, ivy.Shape) else x)
+            x = ivy.nested_map(lambda x: x.shape if isinstance(x, ivy.Shape) else x, x)
         elif isinstance(x, ivy.Shape) and ivy.array_mode:
             x = x.shape
     return x
@@ -37,8 +37,8 @@ def inputs_to_native_shapes(fn: Callable) -> Callable:
     @functools.wraps(fn)
     def _inputs_to_native_shapes(*args, **kwargs):
         args, kwargs = ivy.nested_map(
-            [args, kwargs],
             lambda x: (x.shape if isinstance(x, ivy.Shape) and ivy.array_mode else x),
+            [args, kwargs],
         )
         return fn(*args, **kwargs)
 
@@ -50,8 +50,8 @@ def outputs_to_ivy_shapes(fn: Callable) -> Callable:
     @functools.wraps(fn)
     def _outputs_to_ivy_shapes(*args, **kwargs):
         args, kwargs = ivy.nested_map(
-            [args, kwargs],
             lambda x: (x.shape if isinstance(x, ivy.Shape) and ivy.array_mode else x),
+            [args, kwargs],
         )
         return fn(*args, **kwargs)
 

@@ -72,14 +72,14 @@ def _args_to_native(
         native form.
     """
     native_args = ivy.nested_map(
-        args,
         lambda x: _to_native(x, inplace=cont_inplace, to_ignore=to_ignore),
+        args,
         include_derived,
         shallow=False,
     )
     native_kwargs = ivy.nested_map(
-        kwargs,
         lambda x: _to_native(x, inplace=cont_inplace, to_ignore=to_ignore),
+        kwargs,
         include_derived,
         shallow=False,
     )
@@ -110,8 +110,8 @@ def _args_to_ivy(
      ret
         the same arguments, with any nested NativeProxy instances converted to IvyProxies
     """
-    native_args = ivy.nested_map(args, _to_ivy, include_derived, shallow=False)
-    native_kwargs = ivy.nested_map(kwargs, _to_ivy, include_derived, shallow=False)
+    native_args = ivy.nested_map(_to_ivy, args, include_derived, shallow=False)
+    native_kwargs = ivy.nested_map(_to_ivy, kwargs, include_derived, shallow=False)
     return native_args, native_kwargs
     
 
@@ -124,7 +124,7 @@ def to_ivy(
     include_derived: Optional[Dict[type, bool]] = None,
 ) -> Union[ivy.Array, ivy.NativeArray, Iterable]:
     if nested:
-        return ivy.nested_map(x, _to_ivy, include_derived, shallow=False)
+        return ivy.nested_map(_to_ivy, x, include_derived, shallow=False)
     return _to_ivy(x)
 
 def args_to_ivy(
@@ -132,8 +132,8 @@ def args_to_ivy(
     include_derived: Optional[Dict[type, bool]] = None,
     **kwargs: Dict[str, Any],
 ) -> Tuple[Iterable[Any], Dict[str, Any]]:
-    native_args = ivy.nested_map(args, _to_ivy, include_derived, shallow=False)
-    native_kwargs = ivy.nested_map(kwargs, _to_ivy, include_derived, shallow=False)
+    native_args = ivy.nested_map(_to_ivy, args, include_derived, shallow=False)
+    native_kwargs = ivy.nested_map(_to_ivy, kwargs, include_derived, shallow=False)
     return native_args, native_kwargs 
 
 def to_native(
@@ -145,8 +145,8 @@ def to_native(
 ) -> Union[ivy.Array, ivy.NativeArray, Iterable]:
     if nested:
         return ivy.nested_map(
-            x,
             lambda x: _to_native(x, inplace=cont_inplace, to_ignore=to_ignore),
+            x,
             include_derived,
             shallow=False,
         )
@@ -160,14 +160,14 @@ def args_to_native(
     **kwargs: Dict[str, Any],
 ) -> Tuple[Iterable[Any], Dict[str, Any]]:
     native_args = ivy.nested_map(
-        args,
         lambda x: _to_native(x, inplace=cont_inplace, to_ignore=to_ignore),
+        args,
         include_derived,
         shallow=False,
     )
     native_kwargs = ivy.nested_map(
-        kwargs,
         lambda x: _to_native(x, inplace=cont_inplace, to_ignore=to_ignore),
+        kwargs,
         include_derived,
         shallow=False,
     )

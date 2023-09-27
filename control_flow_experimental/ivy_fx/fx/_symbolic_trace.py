@@ -48,8 +48,7 @@ from graph_compiler.numpy_proxy import custom_np_classes, custom_np_class_names
 import numpy as np
 import ivy
 from ivy.func_wrapper import FN_DECORATORS
-import control_flow_experimental as cfe
-
+import control_flow_experimental.dy2static as dy2s
 
 HAS_VARSTUFF = inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
 
@@ -1556,9 +1555,9 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
                     # which will be used to create the corresponding native proxy
 
                     # get the concrete args/kwargs. Also handle conversions for NewNDArrays
-                    nargs, nkwargs = ivy.nested_map([args,kwargs], lambda a: _from_ND(a._meta_tensor) if isinstance(a, Proxy) else a,shallow=False)
+                    nargs, nkwargs = ivy.nested_map(lambda a: _from_ND(a._meta_tensor) if isinstance(a, Proxy) else a, [args,kwargs],shallow=False)
                     ret = orig_fn(*nargs, **nkwargs)
-                    data = ivy.nested_map(ret, lambda a: _to_ND(a),shallow=False,)
+                    data = ivy.nested_map(lambda a: _to_ND(a), ret, shallow=False,)
                 elif hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.ARRAY_TO_SCALAR_FUNCS["numpy"]:
                     data = 10 #TODO: remove this hardcoding
                 else:
@@ -1823,7 +1822,7 @@ def wrap(fn_or_name: Union[str, Callable], dynamic: bool = False):
     assert currentframe is not None
     f = currentframe.f_back
     assert f is not None
-    if f.f_code.co_name != "<module>" and f.f_code.co_name != "inner_factory":
+    if f.f_code.co_name != "<module>" and f.f_back.f_code.co_name != "<module>":
         raise NotImplementedError("wrap must be called at the top level of a module")
 
     # consider implementing Callable version of this via _autowrap_function_ids / _autowrap_search
@@ -1912,8 +1911,8 @@ def symbolic_trace(
     """
 
     """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
-    args = ivy.nested_map(args, lambda a: ivy.native_array(a) if ivy.is_array(a) else a, shallow=False)
-    kwargs = ivy.nested_map(kwargs, lambda a: ivy.native_array(a) if ivy.is_array(a) else a, shallow=False)
+    args = ivy.nested_map(lambda a: ivy.native_array(a) if ivy.is_array(a) else a, args, shallow=False)
+    kwargs = ivy.nested_map(lambda a: ivy.native_array(a) if ivy.is_array(a) else a, kwargs, shallow=False)
     # wrap the native backend functions
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
@@ -1961,16 +1960,16 @@ def symbolic_trace(
             patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f, to_ivy=to_ivy))
 
         # explicitly wrap all ast transform functions
-        for name, f in cfe.transform_funcs.items():
-            patcher.patch_method(cfe, name, _dummy_tracing_func(f,to_ivy=to_ivy))
+        for name, f in dy2s.transform_funcs.items():
+            patcher.patch_method(dy2s, name, _dummy_tracing_func(f,to_ivy=to_ivy))
 
         # transform the root function if control_flow = True 
         if control_flow:
             try:
                 if isinstance(root, IvyGraph):
-                    root._scripted_call = cfe.to_functional_form(root._scripted_call)
+                    root._scripted_call = dy2s.convert_to_static(root._scripted_call)
                 else:
-                    root = cfe.to_functional_form(root)
+                    root = dy2s.convert_to_static(root)
             except ASTTransformationError:
                 raise ivy.utils.exceptions.IvyException(
                     message="Error while AST transforming the function."
@@ -2051,29 +2050,29 @@ def symbolic_transpile(
 
     ivy_graph.reload_sourcecode(frontend=source)
     ivy_graph.constants = ivy.nested_map(
-        ivy_graph.constants,
         _dtype_and_dev_to_ivy,
+        ivy_graph.constants,
     )
     if to != "ivy":
         ivy.set_backend(to)
     args = ivy.nested_map(
-        args,
         native_array_to_frontend,
+        args,
         include_derived={dict: True},
     )
     kwargs = ivy.nested_map(
-        kwargs,
         native_array_to_frontend,
+        kwargs,
         include_derived={dict: True},
     )
     ivy_graph.constants = ivy.nested_map(
-        ivy_graph.constants,
         native_array_to_frontend,
+        ivy_graph.constants,
     )
     if with_numpy or ivy.current_backend_str == "numpy":
         ivy_graph.constants = ivy.nested_map(
-            ivy_graph.constants,
             _to_ND,
+            ivy_graph.constants,
         )
     if to == "ivy":
         fx_graph, ivy_graph = symbolic_trace(ivy_graph,args=args, to_ivy=True, constant_args=constant_args,frontend=source,with_numpy=with_numpy, control_flow=control_flow,stateful=stateful, **kwargs)

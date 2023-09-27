@@ -438,7 +438,7 @@ class Proxy:
 
                 return iter(
                     ivy.nested_map(
-                        self.node.meta["orig_ret"], lambda x: _index_proxy(self, x)
+                        lambda x: _index_proxy(self, x), self.node.meta["orig_ret"],
                     )
                 )
             return (self[i] for i in range(inst.argval))  # type: ignore[index]
@@ -660,12 +660,12 @@ class Torch_FrontendProxy(Tensor, Proxy):
             IvyProxy(node=array.node, tracer=array.tracer, data=array._native_data, native_proxy=array ) if isinstance(array, NativeProxy) else array
         )
     def __getitem__(self, query, /):
-        ivy_args = ivy.nested_map([self, query], lambda a:Torch_FrontendProxy._to_ivy_proxy(self,a) )
+        ivy_args = ivy.nested_map(lambda a:Torch_FrontendProxy._to_ivy_proxy(self,a),[self, query] )
         ret = ivy.get_item(*ivy_args)
         return Torch_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret)
 
     def __setitem__(self, key, value, /):
-        key, value = ivy.nested_map([key, value], lambda a:Torch_FrontendProxy._to_ivy_proxy(self,a) )
+        key, value = ivy.nested_map(lambda a:Torch_FrontendProxy._to_ivy_proxy(self,a),[key, value] )
         self.ivy_array[key] = value
 
     def __repr__(self):
@@ -707,7 +707,7 @@ class TF_FrontendProxy(EagerTensor, Proxy):
         self._ivy_array = ivy_proxy  #override the _ivy_array to return an IvyProxy
 
     def __getitem__(self, slice_spec, var=None, name="getitem"):
-        ivy_args = ivy.nested_map([self, slice_spec], lambda a:TF_FrontendProxy._to_ivy_proxy(self,a))
+        ivy_args = ivy.nested_map(lambda a:TF_FrontendProxy._to_ivy_proxy(self,a),[self, slice_spec])
         ret = ivy.get_item(*ivy_args)
         return TF_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret)
 
@@ -741,12 +741,12 @@ class Numpy_FrontendProxy(ndarray, Proxy):
         )
 
     def __getitem__(self, key, /):
-        ivy_args = ivy.nested_map([self, key], lambda a: Numpy_FrontendProxy._to_ivy_proxy(self, a))
+        ivy_args = ivy.nested_map(lambda a: Numpy_FrontendProxy._to_ivy_proxy(self, a), [self, key])
         ret = ivy.get_item(*ivy_args)
         return Numpy_FrontendProxy(node=ret.node, tracer=ret.tracer, data=ret._ivy_data, ivy_proxy=ret, _init_overload=True)
 
     def __setitem__(self, key, value, /):
-        key, value = ivy.nested_map([key, value], lambda a: Numpy_FrontendProxy._to_ivy_proxy(self, a))
+        key, value = ivy.nested_map(lambda a: Numpy_FrontendProxy._to_ivy_proxy(self, a),[key, value])
         self.ivy_array[key] = value
 
     def __repr__(self):

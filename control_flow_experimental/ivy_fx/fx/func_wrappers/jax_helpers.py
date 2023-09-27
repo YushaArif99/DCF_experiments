@@ -28,7 +28,7 @@ def _from_jax_frontend_proxy_to_ivy_proxy(x):
 def _from_ivy_proxy_to_jax_frontend_proxy(x, nested=False, include_derived=None):
     if nested:
         return ivy.nested_map(
-            x, _from_ivy_proxy_to_jax_frontend_proxy, include_derived, shallow=False
+            _from_ivy_proxy_to_jax_frontend_proxy, x, include_derived, shallow=False
         )
     elif isinstance(x, IvyProxy):
         return JAX_FrontendProxy(node=x.node, tracer=x.tracer, data=x._ivy_data, ivy_proxy=x)
@@ -40,8 +40,8 @@ def _from_ivy_proxy_to_jax_frontend_proxy_weak_type(
 ):
     if nested:
         return ivy.nested_map(
-            x,
             _from_ivy_proxy_to_jax_frontend_proxy_weak_type,
+            x,
             include_derived,
             shallow=False,
         )
@@ -64,14 +64,14 @@ def inputs_to_ivy_proxies_jax(fn: Callable) -> Callable:
             has_out = True
         # convert all proxies in the inputs to IvyProxy instances
         new_args = ivy.nested_map(
-            args,
             _from_jax_frontend_proxy_to_ivy_proxy,
+            args,
             include_derived={tuple: True},
             shallow=False,
         )
         new_kwargs = ivy.nested_map(
-            kwargs,
             _from_jax_frontend_proxy_to_ivy_proxy,
+            kwargs,
             include_derived={tuple: True},
             shallow=False,
         )

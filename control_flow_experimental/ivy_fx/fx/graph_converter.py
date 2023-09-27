@@ -292,14 +292,14 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     node.id_ = id(node)
     # remove parameters from args and kwargs
     new_args = ivy.nested_map(
-        args,
         lambda x: None if _get_unique_id(x) in glob.dependent_ids else x,
+        args,
         include_derived=True,
         shallow=False,
     )
     new_kwargs = ivy.nested_map(
-        kwargs,
         lambda x: None if _get_unique_id(x) in glob.dependent_ids else x,
+        kwargs,
         include_derived=True,
         shallow=False,
     )
@@ -313,10 +313,10 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
         else t
     )
     new_args = ivy.nested_map(
-        new_args, to_mutable_list, include_derived=False, shallow=False
+        to_mutable_list, new_args, include_derived=False, shallow=False
     )
     new_kwargs = ivy.nested_map(
-        new_kwargs, to_mutable_list, include_derived=False, shallow=False
+        to_mutable_list, new_kwargs, include_derived=False, shallow=False
     )
     node.args = new_args
     node.kwargs = new_kwargs
@@ -351,7 +351,7 @@ def _create_ivy_fn(node, to_ivy=False):
                 else:
                     subgraphs.append(tracer_to_ivy_graph(subg, fn=subg._fn))
             node.args = ivy.nested_map(
-                node.args, lambda x: x.c if isinstance(x, Constant) else x, include_derived=True
+                lambda x: x.c if isinstance(x, Constant) else x, node.args, include_derived=True
             )
             if_else_node = log_ivy_fn(
                 graph,
@@ -374,7 +374,7 @@ def _create_ivy_fn(node, to_ivy=False):
                 else:
                     subgraphs.append(tracer_to_ivy_graph(subg, fn=subg._fn))
             node.args = ivy.nested_map(
-                node.args, lambda x: x.c if isinstance(x, Constant) else x, include_derived=True
+                lambda x: x.c if isinstance(x, Constant) else x, node.args, include_derived=True
             )
             while_loop_node = log_ivy_fn(
                 graph,
@@ -388,10 +388,10 @@ def _create_ivy_fn(node, to_ivy=False):
             while_loop_node.test = node.meta["test"]
         else:
             node.args = ivy.nested_map(
-                node.args, lambda x: x.c if isinstance(x, Constant) else x, include_derived=True
+                lambda x: x.c if isinstance(x, Constant) else x, node.args, include_derived=True
             )
             node.kwargs = ivy.nested_map(
-                node.kwargs, lambda x: x.c if isinstance(x, Constant) else x, include_derived=True
+                lambda x: x.c if isinstance(x, Constant) else x, node.kwargs, include_derived=True
             )
             arg_stateful_idxs = node.meta['arg_stateful_idxs'] if node.meta.get('arg_stateful_idxs') else []
             kwarg_stateful_idxs = node.meta['kwarg_stateful_idxs'] if node.meta.get('kwarg_stateful_idxs') else []

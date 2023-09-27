@@ -13,10 +13,10 @@ def convert_proxies_to_ivy_arrays(func):
     @functools.wraps(func)
     def _convert_proxies_to_ivy_arrays(*args, **kwargs):
         args = ivy.nested_map(
-            args, lambda a: a._meta_tensor if isinstance(a, Proxy) else a, shallow=False,
+            lambda a: a._meta_tensor if isinstance(a, Proxy) else a, args, shallow=False,
         )
         kwargs = ivy.nested_map(
-            kwargs, lambda a: a._meta_tensor if isinstance(a, Proxy) else a, shallow=False,
+            lambda a: a._meta_tensor if isinstance(a, Proxy) else a, kwargs, shallow=False,
         )
 
         return func(*args, **kwargs)
@@ -99,7 +99,7 @@ def to_ivy(
         the input in its native framework form in the case of IvyProxy or instances.
     """
     if nested:
-        return ivy.nested_map(x, _to_ivy, include_derived, shallow=False)
+        return ivy.nested_map(_to_ivy, x, include_derived, shallow=False)
     return _to_ivy(x)
 
 
@@ -138,8 +138,8 @@ def to_native(
     """
     if nested:
         return ivy.nested_map(
-            x,
             lambda x: _to_native(x, inplace=cont_inplace, to_ignore=to_ignore),
+            x,
             include_derived,
             shallow=False,
         )

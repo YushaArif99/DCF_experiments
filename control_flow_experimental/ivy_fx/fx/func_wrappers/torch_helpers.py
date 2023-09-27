@@ -15,8 +15,8 @@ def _from_ivy_proxies_to_torch_frontend_proxies(
 ):
     if nested:
         return ivy.nested_map(
-            x,
             _from_ivy_proxies_to_torch_frontend_proxies,
+            x,
             include_derived,
             shallow=False,
         )
@@ -65,10 +65,10 @@ def inputs_to_ivy_proxies_torch(fn: Callable) -> Callable:
             )
         # convert all frontend proxies to ivy proxy instances
         new_args = ivy.nested_map(
-            args, _to_ivy_proxy, include_derived={tuple: True}, shallow=False
+            _to_ivy_proxy, args, include_derived={tuple: True}, shallow=False
         )
         new_kwargs = ivy.nested_map(
-            kwargs, _to_ivy_proxy, include_derived={tuple: True}, shallow=False
+            _to_ivy_proxy, kwargs, include_derived={tuple: True}, shallow=False
         )
         return fn(*new_args, **new_kwargs)
 

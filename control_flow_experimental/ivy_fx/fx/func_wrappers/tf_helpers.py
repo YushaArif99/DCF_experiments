@@ -55,10 +55,10 @@ def inputs_to_ivy_proxies_tf(fn: Callable) -> Callable:
 
         # convert all arrays in the inputs to IvyProxy instances
         ivy_args = ivy.nested_map(
-            args, _ivy_proxy_to_tensorflow, include_derived=True, shallow=False
+            _ivy_proxy_to_tensorflow, args, include_derived=True, shallow=False
         )
         ivy_kwargs = ivy.nested_map(
-            kwargs, _ivy_proxy_to_tensorflow, include_derived=True, shallow=False
+            _ivy_proxy_to_tensorflow, kwargs, include_derived=True, shallow=False
         )
         if has_out:
             ivy_kwargs["out"] = out
@@ -92,7 +92,7 @@ def outputs_to_frontend_proxies_tf(fn: Callable) -> Callable:
 
         # convert all arrays in the return to `frontend.Tensorflow.tensor` instances
         return ivy.nested_map(
-            ret, _tf_frontend_proxy_to_ivy, include_derived={tuple: True}
+            _tf_frontend_proxy_to_ivy, ret, include_derived={tuple: True}
         )
 
     _outputs_to_frontend_proxies_tf.outputs_to_frontend_proxies_tf = True
