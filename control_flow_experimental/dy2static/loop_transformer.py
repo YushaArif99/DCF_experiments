@@ -76,7 +76,7 @@ def create_while_nodes(
 
     while_func_name = "ivy.while_loop"
     while_node_str = (
-        "{} = {}({}, {}, vars={})".format(
+        "{} = {}({}, {}, {})".format(
             ast_to_source_code(create_tuple_node(loop_var_names)).strip('\n'),
             while_func_name,
             condition_name,
@@ -548,7 +548,7 @@ class LoopTransformer(BaseTransformer):
         # 2. get original loop vars
         loop_var_names, create_var_names = (
             node.ivy_scope.modified_vars(),
-            node.ivy_scope.created_vars(),
+            node.ivy_scope.created_vars().union(node.ivy_scope.read_vars()),
         )
         push_pop_names = list(node.ivy_scope.variadic_length_vars())
         # TODO: Remove the bunch of code?  We have the unique format `for A in B:`

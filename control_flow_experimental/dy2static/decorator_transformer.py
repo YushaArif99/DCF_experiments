@@ -114,7 +114,7 @@ class DecoratorTransformer(BaseTransformer):
                     )
 
             else:
-                decofun_str = '{} = cfe.Call({})({})'.format(
+                decofun_str = '{} = dy2s.Call({})({})'.format(
                     decoed_func, deco_full_name, deco_target
                 )
 

@@ -38,7 +38,7 @@ def is_api_in_module(node, module_prefix):
     func_str = astor.to_source(gast.gast_to_ast(func_node)).strip()
     try:
         import ivy 
-        import control_flow_experimental.dy2static as cfe
+        import control_flow_experimental.dy2static as dy2s
 
         return eval(f"_is_api_in_module_helper({func_str}, '{module_prefix}')")
     except Exception:

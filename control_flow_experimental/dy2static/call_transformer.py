@@ -30,16 +30,8 @@ class CallTransformer(BaseTransformer):
 
         func_str = ast_to_source_code(node.func).strip()
         try:
-            need_convert_builtin_func_list = {
-                'len',
-                'zip',
-                'range',
-                'enumerate',
-                'print',
-            }
             is_builtin = eval(f"is_builtin({func_str})")  # noqa: F811
-            need_convert = func_str in need_convert_builtin_func_list
-            return is_builtin and not need_convert
+            return is_builtin
         except Exception:
             return False
 
@@ -59,7 +51,18 @@ class CallTransformer(BaseTransformer):
         if PDB_SET in func_str:
             return node
 
-        new_func_str = f"cfe.Call({func_str})"
+        new_func_str = f"dy2s.Call({func_str})"
+        try:
+            need_convert_builtin_func_list = {
+                'assert'
+                'print',
+            }
+            need_convert = func_str in need_convert_builtin_func_list
+            if need_convert:
+                new_func_str = f"dy2s.{func_str.capitalize()}"
+        except Exception:
+            new_func_str = f"dy2s.Call({func_str})"
+
         new_func_ast = gast.parse(new_func_str).body[0].value
         node.func = new_func_ast
 

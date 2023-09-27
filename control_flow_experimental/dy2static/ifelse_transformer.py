@@ -427,7 +427,7 @@ def create_convert_ifelse_node(
         pred_func_source = 'lambda {lambda_args}: {pred_fn}'.format(lambda_args=lambda_args, pred_fn=ast_to_source_code(pred_func))
         true_func_source = 'lambda {lambda_args}: {true_fn}'.format(lambda_args=lambda_args, true_fn=ast_to_source_code(true_func))
         false_func_source = 'lambda {lambda_args}: {false_fn}'.format(lambda_args=lambda_args, false_fn=ast_to_source_code(false_func))
-        convert_ifelse_fn ='ivy.if_else({pred_fn}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
+        convert_ifelse_fn ='ivy.if_else({pred_fn}, {true_fn}, {false_fn}, {dict_vars})'.format(
             pred_fn=pred_func_source,
             true_fn=true_func_source,
             false_fn=false_func_source,

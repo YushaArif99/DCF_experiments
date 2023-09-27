@@ -25,72 +25,22 @@ def unpack_by_structure(target, structure):
 
 
 def convert_len(var):
-    #TODO: add this logic to ivy_fx
-    # if isinstance(var, VariableTuple):
-    #     return var.__len__()
     return len(var)
 
 
 def convert_zip(*args):
     return zip(*args)
 
-#TODO: add this logic to ivy_fx
-# class VariableTuple:
-#     """
-#     this class will cause enumerate can't be wrapped by other iterator change function.
-#     this will be fixed when list<Variable> is producted.
-#     VariableTuple can only deal with variables which is fixed.
-#     """
-
-#     def __init__(self, var, start=0):
-#         self.var = var
-#         self.len = convert_len(var)
-#         if isinstance(self.len, Proxy):
-#             self.rag = ivy.arange(start, start + self.len, 1, ivy.int64)
-#         else:
-#             self.rag = range(start, start + self.len)
-
-#     def __getitem__(self, idx):
-#         return self.rag[idx], self.var[idx]
-
-#     def __len__(self):
-#         return self.len
-
 
 def convert_enumerate(*args):
-    #TODO: add this logic to ivy_fx
-    # has_variable = any(isinstance(x, Proxy) for x in args)
-    # if has_variable:
-    #     return VariableTuple(*args)
     return enumerate(*args)
 
 
 def convert_range(*args):
-    #TODO: add this logic to ivy_fx
-    # has_variable = any(isinstance(x, Proxy) for x in args)
-    # if has_variable:
-    #     if len(args) == 1:
-    #         return ivy.arange(0, args[0], 1, ivy.int64)
-    #     if len(args) == 2:
-    #         return ivy.arange(args[0], args[1], 1, ivy.int64)
-    #     if len(args) == 3:
-    #         return ivy.arange(args[0], args[1], args[2], ivy.int64)
     return range(*args)
 
 
-
 def convert_assert(cond, message=""):
-    """
-    A function representation of a Python ``assert`` statement.
-    """
-    #TODO: add this logic to ivy_fx
-    # if isinstance(cond, Proxy):
-    #     cond = ivy.cast_bool(cond)
-        # TODO: add an ivy.Assert function in the ivy API.
-
-        #return ivy.Assert(cond)
-    # else:
-    #     assert cond, message
     assert cond, message
 
 
@@ -99,11 +49,6 @@ def convert_print(*objects, sep=' ', end='\n', file=None, flush=False):
     A function representing Python ``print`` function. It will print all arguments
     at compile time and only print the Tensor values at runtime.
     """
-    # for obj in objects:
-    #     if isinstance(obj, Proxy):
-    #         #TODO: add an ivy.Print function in the ivy API
-    #         #ivy.Print(obj)
-    #         pass
     print(*objects, sep=sep, end=end, file=file, flush=flush)
 
 # -------------------

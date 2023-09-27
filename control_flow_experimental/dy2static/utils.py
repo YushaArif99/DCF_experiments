@@ -366,13 +366,13 @@ def _inject_import_statements():
     backend_import = ivy.current_backend_str()
     import_statements = [
         "import ivy",
-        "import control_flow_experimental.dy2static as cfe",
+        "import control_flow_experimental.dy2static as dy2s",
         "import control_flow_experimental.ivy_fx.fx as fx",
         "from typing import *",
         "import numpy as np",
         "import warnings",
         "warnings.filterwarnings('ignore', category=DeprecationWarning)",
-        "\n[fx.wrap(builtin) for builtin in ['min', 'max', 'sum', 'len']]\n\n"
+        "\n[fx.wrap(builtin, dynamic=True) for builtin in [min, max, sum, len , range, enumerate, zip]]\n\n"
     ]
     return '\n'.join(import_statements) + '\n'
 
@@ -675,6 +675,7 @@ class NameScope:
         self.args = set()
         self.father = None  # point to the nearest function name scope.
         self.w_vars = set()  # all qualified + normal names been stored
+        self.r_vars = set() # all qualified + normal names have been stored
         self.created = set()  # useful for control flow compatibility
         # only valid in control_flow nodes
         # may be remove later.
@@ -696,7 +697,10 @@ class NameScope:
     def modified_vars(self):
         # may be globals / non-locals / args / qualified names and created_vars
         return self.w_vars
-
+    
+    def read_vars(self):
+        return self.r_vars 
+    
     def variadic_length_vars(self):
         """
         At present, we do not support global append, such as
@@ -757,6 +761,7 @@ class NameScope:
         self.nonlocals |= name_scope.nonlocals
         self.args |= name_scope.args
         self.w_vars |= name_scope.w_vars
+        self.r_vars |= name_scope.r_vars
         self.push_pop_vars |= name_scope.push_pop_vars
 
 
@@ -847,7 +852,8 @@ class FunctionNameLivenessAnalysis(gast.NodeVisitor):
         write_context = (gast.Store, gast.AugStore, gast.Del)
         if isinstance(node.ctx, write_context):
             self._current_name_scope().w_vars.add(node.id)
-
+        elif isinstance(node.ctx, gast.Load) and node.id not in ['enumerate', 'range']:
+            self._current_name_scope().r_vars.add(node.id)
     def visit_FunctionDef(self, node):
         def pre_func():
             self._current_name_scope().args |= set(

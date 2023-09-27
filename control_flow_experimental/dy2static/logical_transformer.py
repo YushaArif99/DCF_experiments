@@ -30,7 +30,7 @@ class LogicalTransformer(BaseTransformer):
         a = x > 1 and y < 1
 
     Transformed code:
-        a = cfe.bool_and( cfe.cmp_gt(x,1), cfe.cmp_lt(y,1) )
+        a = dy2s.bool_and( dy2s.cmp_gt(x,1), dy2s.cmp_lt(y,1) )
     """
 
     def __init__(self, root):
@@ -76,20 +76,20 @@ class LogicalTransformer(BaseTransformer):
         self.generic_visit(node)
         if isinstance(node.op, gast.Not):
             arg = ast_to_source_code(node.operand)
-            new_node_str = f"cfe.unary_not({arg})"
+            new_node_str = f"dy2s.unary_not({arg})"
             new_node = gast.parse(new_node_str).body[0].value
             return new_node
         return node
 
     def _create_bool_op_node(self, nodes, api_type):
         args = [ast_to_source_code(child) for child in nodes]
-        new_node_str = "cfe.{}({}, {})".format(api_type, args[0], args[1])
+        new_node_str = "dy2s.{}({}, {})".format(api_type, args[0], args[1])
         new_node = gast.parse(new_node_str).body[0].value
         return new_node
 
     def _create_cmp_op_node(self, left, right, api_type):
         left_arg = ast_to_source_code(left)
         right_arg = ast_to_source_code(right)
-        new_node_str = "cfe.{}({}, {})".format(api_type, left_arg, right_arg)
+        new_node_str = "dy2s.{}({}, {})".format(api_type, left_arg, right_arg)
         new_node = gast.parse(new_node_str).body[0].value
         return new_node

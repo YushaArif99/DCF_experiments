@@ -19,7 +19,7 @@ class AssertTransformer(BaseTransformer):
     def visit_Assert(self, node):
         convert_assert_node = (
             gast.parse(
-                'cfe.Assert({test}, {msg})'.format(
+                'dy2s.Assert({test}, {msg})'.format(
                     test=ast_to_source_code(node.test),
                     msg=ast_to_source_code(node.msg) if node.msg else "",
                 )
