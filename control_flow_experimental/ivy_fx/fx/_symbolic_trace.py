@@ -31,7 +31,7 @@ from . import _pytree as pytree
 from ._compatibility import compatibility
 from .graph import _PyTreeCodeGen, _PyTreeInfo, Graph
 from .node import Argument, base_types, map_aggregate
-from .proxy import Proxy, ParameterProxy, IvyProxy, TracerBase, Scope, ScopeContextManager
+from .proxy import Proxy, ParameterProxy, IvyProxy, ProxyType, TracerBase, Scope, ScopeContextManager, _get_proxy_type
 from .graph_converter import tracer_to_ivy_graph
 from .func_wrappers import (
     replace_decorators,
@@ -48,7 +48,7 @@ from graph_compiler.numpy_proxy import custom_np_classes, custom_np_class_names
 import numpy as np
 import ivy
 from ivy.func_wrapper import FN_DECORATORS
-import control_flow_experimental.dy2static as dy2s
+import control_flow_experimental.dy2static as dy2s 
 
 HAS_VARSTUFF = inspect.CO_VARARGS | inspect.CO_VARKEYWORDS
 
@@ -1091,17 +1091,14 @@ class Tracer(TracerBase):
                     return x
 
                 return pytree.tree_map(replace_ph, constant_args[name])
-
+    
             if concrete_inputs is not None and name in concrete_inputs:
-                concr_arg = concrete_inputs[name]
-                proxy_data = concr_arg
+                proxy_data = concrete_inputs[name]
+                proxy_type = _get_proxy_type(proxy_data)
             else:
                 proxy_data = None
-            # if name[0] == "*":
-            #     default = ()
-            # else:
-            #     param = sig.parameters[name]
-            #     default = () if param.default is inspect.Parameter.empty else (param.default,)  # type: ignore[assignment]
+                proxy_type = ProxyType.NATIVE_PROXY
+
             return self.create_proxy(
                 "placeholder",
                 name,
@@ -1109,6 +1106,7 @@ class Tracer(TracerBase):
                 {},
                 type_expr=fn_for_analysis.__annotations__.get(name, None),
                 data=proxy_data,
+                proxy_type=proxy_type,
                 frontend=frontend,
                 to_ivy=to_ivy,
                 with_numpy=with_numpy,

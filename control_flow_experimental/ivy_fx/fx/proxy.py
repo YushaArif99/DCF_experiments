@@ -5,6 +5,7 @@ import inspect
 import operator
 import collections
 import functools
+from enum import Enum
 from numbers import Number
 """TODO: remove torch dependencies."""
 import torch
@@ -109,6 +110,43 @@ class ScopeContextManager:
         self._scope.module_type = self._prev_scope.module_type
         return
 
+class ProxyType(Enum):
+    IVY_PROXY = 1
+    FRONTEND_PROXY = 2
+    NATIVE_PROXY = 3
+    SHAPE_PROXY = 4
+    DTYPE_PROXY = 5
+    SCALAR_PROXY = 6
+    BUILTIN_PROXY = 7
+    NDARRAY_PROXY = 8
+    UNDEFINED_PROXY = 9
+
+class ProxyFactory:
+    def __init__(self, to_ivy, frontend, with_numpy):
+        self.to_ivy = to_ivy 
+        self.frontend = frontend
+        self.with_numpy = with_numpy 
+    
+    def create_scalar_proxy(self,node, tracer, data):
+        return ScalarProxy(node, tracer, data) 
+    
+    def create_builtin_proxy(self,node, tracer, data):
+        return BuiltinProxy(node, tracer, data) 
+    
+    def create_array_proxy(self,node, tracer, data):
+        native_proxy = NativeProxy(node, tracer, native_data=data) 
+        if self.to_ivy:
+            return IvyProxy(node, tracer, data=data, native_proxy=native_proxy, to_ivy=True) 
+        elif self.frontend: 
+            ivy_proxy = IvyProxy(node, tracer, data=data, native_proxy=native_proxy, to_ivy=True)
+            frontend_proxy = FRONTEND_PROXIES[self.frontend]
+            return frontend_proxy(node, tracer, data=data, ivy_proxy=ivy_proxy, frontend=self.frontend)
+        return native_proxy
+    
+    def create_shape_proxy(self,node, tracer, data):
+        pass 
+    def create_dtype_proxy(self,node, tracer, data):
+        pass 
 
 @compatibility(is_backward_compatible=True)
 class TracerBase:
@@ -165,6 +203,7 @@ class TracerBase:
         self,
         node: Node,
         data: Union[ivy.Array, ivy.NativeArray, Number, Iterable[Number]] = None,
+        proxy_type: ProxyType = None,
         frontend: str = None,
         to_ivy=False,
         with_numpy=True,
@@ -173,24 +212,29 @@ class TracerBase:
         # FP : FrontendProxy 
         # IP : IvyProxy 
         # NP : NativeProxy 
-        # -> : contains 
-        if ivy.isscalar(data):
-            return Proxy(node,self, data=data, frontend=None, to_ivy=False)
-        if data is None: 
-            # create an empty array as a placeholder
-            data = ivy.native_array([])
-        if ivy.current_backend_str() == "numpy" or with_numpy:
-            data = _to_ND(data) 
-        if frontend: 
-            native_proxy = NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
-            ivy_proxy = IvyProxy(node, self, data=data, native_proxy=native_proxy, frontend=None, to_ivy=True)
-            frontend_proxy = FRONTEND_PROXIES[frontend]
-            return frontend_proxy(node, self, data=data, ivy_proxy=ivy_proxy, frontend=frontend, to_ivy=False)
-        elif to_ivy:
-            native_proxy = NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
-            return IvyProxy(node, self, data=data, native_proxy=native_proxy, frontend=None, to_ivy=True)
-        else: 
-            return NativeProxy(node, self, native_data=data, frontend=None, to_ivy=False) 
+        # -> : has-a relation 
+        
+        factory = ProxyFactory(to_ivy, frontend, with_numpy)
+
+        if proxy_type == ProxyType.SCALAR_PROXY:
+            return factory.create_scalar_proxy(node, self, data)
+        if proxy_type == ProxyType.BUILTIN_PROXY:
+            return factory.create_builtin_proxy(node, self, data)
+        elif proxy_type == ProxyType.DTYPE_PROXY:
+            return factory.create_dtype_proxy(node, self, data)
+        elif proxy_type == ProxyType.SHAPE_PROXY:
+            return factory.create_shape_proxy(node,self,data)
+        elif proxy_type == ProxyType.UNDEFINED_PROXY:
+            return Proxy(node, self, data)
+        else:
+            if data is None: 
+                data = ivy.native_array([]) 
+
+            if ivy.current_backend_str() == "numpy" or with_numpy or proxy_type == ProxyType.NDARRAY_PROXY:
+                data = _to_ND(data) 
+            
+            return factory.create_array_proxy(node, self, data)
+        
 
     @compatibility(is_backward_compatible=True)
     def create_proxy(
@@ -203,6 +247,7 @@ class TracerBase:
         type_expr: Optional[Any] = None,
         proxy_factory_fn: Callable[[Node], "Proxy"] = None,
         data: Union[ivy.Array, ivy.NativeArray] = None,
+        proxy_type: ProxyType = None,
         frontend: str = None,
         to_ivy=False,
         with_numpy=True,
@@ -225,7 +270,7 @@ class TracerBase:
         node = self.create_node(kind, target, args_, kwargs_, name, type_expr)
 
         if not proxy_factory_fn:
-            proxy = self.proxy(node, data, frontend=frontend, to_ivy=to_ivy, with_numpy=with_numpy)
+            proxy = self.proxy(node, data, proxy_type=proxy_type, frontend=frontend, to_ivy=to_ivy, with_numpy=with_numpy)
         else:
             proxy = proxy_factory_fn(node,data)
 
@@ -403,7 +448,7 @@ class Proxy:
         return f"Proxy({self.node.name})"
 
     def __getattr__(self, k) -> "Attribute":
-        return getattr(self._meta_tensor, k)
+        return Attribute(self, k)
 
     def __call__(self, *args, **kwargs) -> "Proxy":
         return self.tracer.create_proxy(
@@ -780,6 +825,52 @@ class Attribute(Proxy):
     def __repr__(self):
         return f"Attribute({self.attr})"
 
+@compatibility(is_backward_compatible=True)
+class ScalarProxy(Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
+        super(ScalarProxy, self).__init__(node, tracer, data, frontend, to_ivy) 
+        self._scalar = data
+
+    def __repr__(self):
+        return f"ScalarProxy({self.node.name})"
+    
+    def __getattr__(self, k) -> "NativeAttribute":
+        native_attr = getattr(self._scalar, k)
+        if callable(native_attr):
+            return NativeAttribute(self, getattr(type(self._scalar), k))
+        else:
+            return native_attr
+
+@compatibility(is_backward_compatible=True)
+class BuiltinProxy(IvyProxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
+        native_arr = ivy.native_array([])
+        native_proxy = NativeProxy(node, tracer, native_arr) 
+        super(BuiltinProxy, self).__init__(node, tracer, native_arr, native_proxy=native_proxy) 
+        self._collection = data
+
+    def __repr__(self):
+        return f"BuiltinProxy({self.node.name})"
+    
+    def __getattr__(self, k) -> "NativeAttribute":
+        native_attr = getattr(self._collection, k)
+        if callable(native_attr):
+            return NativeAttribute(self, getattr(type(self._collection), k))
+        else:
+            return native_attr
+
 @compatibility(is_backward_compatible=False)
 class ParameterProxy(Proxy):
     """
@@ -822,9 +913,10 @@ for method in magic_methods:
     def _scope(method):
         def impl(*args, **kwargs):
             tracer = args[0].tracer
+            data = args[0]._meta_tensor
             target = getattr(operator, method)
             return tracer.create_proxy(
-                "call_function", target, args, kwargs, data=None,
+                "call_function", target, args, kwargs, data=data, proxy_type=_get_proxy_type(data)
             )
 
         impl.__name__ = method
@@ -839,8 +931,9 @@ def _define_reflectable(orig_method_name):
 
     def impl(self, rhs):
         target = getattr(operator, orig_method_name)
+        data = self._meta_tensor
         return self.tracer.create_proxy(
-            "call_function", target, (rhs, self), {}, data=None
+            "call_function", target, (rhs, self), {}, data=data, proxy_type=_get_proxy_type(data)
         )
 
     impl.__name__ = method_name
@@ -856,9 +949,10 @@ for method in inplace_methods:
     def _scope(method):
         def impl(*args, **kwargs):
             tracer = args[0].tracer
+            data = args[0]._meta_tensor
             target = getattr(operator, method)
             return tracer.create_proxy(
-                "call_function", target, args, kwargs, data=None
+                "call_function", target, args, kwargs, data=data, proxy_type=_get_proxy_type(data)
             )
 
         impl.__name__ = method
@@ -908,47 +1002,19 @@ for method in inplace_methods:
     method = f'__{method.strip("_")}__'
     _scope(method)
 
-# define dunder methods for the NativeShapeProxy class     
-for method in magic_methods:
-
-    def _shape_scope(method):
-        def impl(*args, **kwargs):
-            native_method =  getattr(type(args[0]._native_shape), method)
-            return native_method(*args,**kwargs)
-
-        impl.__name__ = method
-        setattr(NativeShapeProxy, method, impl) 
-    method = f'__{method.strip("_")}__'
-    _shape_scope(method)
-
-
-def _define_reflectable(orig_method_name):
-    method_name = f'__r{orig_method_name.strip("_")}__'
-
-    def shape_impl(self, rhs):
-        native_reflectable = getattr(type(self._native_shape), orig_method_name)
-        return native_reflectable(self, rhs)
-
-    shape_impl.__name__ = method_name
-    shape_impl.__qualname__ = method_name
-    setattr(NativeShapeProxy, method_name, shape_impl)
-
-
-for orig_method_name in reflectable_magic_methods:
-    _define_reflectable(orig_method_name)
-
-for method in inplace_methods:
-
-    def _shape_scope(method):
-        def impl(*args, **kwargs):
-            native_inp_method = getattr(type(args[0]._native_shape), method)
-            return native_inp_method(*args, **kwargs)
-
-        impl.__name__ = method
-        setattr(NativeShapeProxy, method, impl)
-    method = f'__{method.strip("_")}__'
-    _shape_scope(method)
-
+def _get_proxy_type(data):
+    if ivy.is_array(data):
+        return ProxyType.NATIVE_PROXY
+    elif ivy.is_native_dtype(data):
+        return ProxyType.DTYPE_PROXY
+    elif ivy.isscalar(data):
+        return ProxyType.SCALAR_PROXY
+    elif isinstance(data, (list, tuple, dict, set)):
+        return ProxyType.BUILTIN_PROXY
+    #TODO: add check for handling shapes
+    else:
+        return ProxyType.UNDEFINED_PROXY
+    
 FRONTEND_PROXIES = {
     "torch": Torch_FrontendProxy,
     "jax": JAX_FrontendProxy,
