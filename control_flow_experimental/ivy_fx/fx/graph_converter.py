@@ -380,8 +380,8 @@ def _create_ivy_fn(node, to_ivy=False):
                 graph,
                 fn=node.target,
                 ret=node,
-                args=list(node.args[2].values()),
-                kwargs={},
+                args=[],
+                kwargs=node.args[2],
                 to_ivy=to_ivy,
             )
             while_loop_node.subgraphs = subgraphs
