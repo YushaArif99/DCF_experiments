@@ -1072,8 +1072,9 @@ def create_nonlocal_stmt_nodes(names):
     func_code = "nonlocal {}".format(','.join(names))
     return [gast.parse(func_code).body[0]]
         
-def create_dict_node(names):
+def create_dict_node(names, modified_vars=[]):
     assert isinstance(names, (list, tuple))
+    assert isinstance(modified_vars, (set,list))
 
     mapped = list(filter(lambda n: '.' not in n, names))
     mapped = list(filter(lambda n: '[' not in n, mapped))
@@ -1086,7 +1087,8 @@ def create_dict_node(names):
     key_nodes = []
     value_nodes = []
     for var_name in names:
-        key_node = gast.Constant(value=str(var_name), kind=None)
+        val = f"__for_loop_{var_name}" if var_name in modified_vars else str(var_name)
+        key_node = gast.Constant(value=val, kind=None)
         value_node = gast.Name(
             id=str(var_name), ctx=gast.Load(), annotation=None, type_comment=None
         )

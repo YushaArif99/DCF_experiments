@@ -35,6 +35,7 @@ def create_while_nodes(
     condition_name,
     body_name,
     loop_var_names,
+    modified_vars,
 ):
     """
     Returns a list of gast.Node which represents the calling of Ivy
@@ -81,7 +82,7 @@ def create_while_nodes(
             while_func_name,
             condition_name,
             body_name,
-            ast_to_source_code(create_dict_node(loop_var_names)),
+            ast_to_source_code(create_dict_node(loop_var_names, modified_vars)),
         )
     )
     while_node = gast.parse(while_node_str).body[0]
@@ -546,9 +547,9 @@ class LoopTransformer(BaseTransformer):
             return [node]
         init_stmts, cond_stmt, body_stmts = stmts_tuple
         # 2. get original loop vars
-        loop_var_names, create_var_names = (
+        write_var_names, read_var_names = (
             node.ivy_scope.modified_vars(),
-            node.ivy_scope.created_vars().union(node.ivy_scope.read_vars()),
+            node.ivy_scope.created_vars() | node.ivy_scope.read_vars(),
         )
         push_pop_names = list(node.ivy_scope.variadic_length_vars())
         # TODO: Remove the bunch of code?  We have the unique format `for A in B:`
@@ -557,9 +558,13 @@ class LoopTransformer(BaseTransformer):
         #   1. for x in var -> x is no need
         #   2. for i, x in enumerate(var) -> x is no need
         if current_for_node_parser.is_for_iter():
-            iter_var_name = current_for_node_parser.iter_var_name
+            loop_var_names = set()
+            iter_var_name = ast_to_source_code(current_for_node_parser.iter_args).strip('\n')
             iter_idx_name = current_for_node_parser.iter_idx_name
+            iter_var_len = current_for_node_parser.iter_var_len_name
+            loop_var_names.add(iter_var_name)
             loop_var_names.add(iter_idx_name)
+            loop_var_names.add(iter_var_len)
             if current_for_node_parser.enum_idx_name is not None:
                 loop_var_names.add(current_for_node_parser.enum_idx_name)
 
@@ -575,7 +580,7 @@ class LoopTransformer(BaseTransformer):
         # we do this in CreateUndefinedVarTransformer
 
         # create non-local statement for body and cond.
-        nonlocal_names = list(loop_var_names | create_var_names | set(push_pop_names))
+        nonlocal_names = list(loop_var_names | write_var_names | read_var_names | set(push_pop_names))
         nonlocal_names.sort()
         # TODO(dev): Need a better way to deal this.
         if ARGS_NAME in nonlocal_names:
@@ -630,6 +635,7 @@ class LoopTransformer(BaseTransformer):
             condition_func_node.name,
             body_func_node.name,
             nonlocal_names,
+            write_var_names,
         )
         new_stmts.extend(while_loop_nodes)
 

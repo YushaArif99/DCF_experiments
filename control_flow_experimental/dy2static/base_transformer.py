@@ -137,7 +137,7 @@ class ForLoopTuplePreTransformer(BaseTransformer):
         tuple_iterator = unique_name.generate(FOR_ITER_ITERATOR_PREFIX)
         origin_tuple_node = node.target
         assign_iterator_node = gast.parse(
-            f"{tuple_iterator} = {ast_to_source_code(node.iter).strip()}"
+            f"{tuple_iterator} = list({ast_to_source_code(node.iter).strip()})"
         ).body[0]
         node.target = gast.Name(
             id=tuple_target,
@@ -316,9 +316,8 @@ class ForNodeVisitor:
     def _parse_for_stmts(self):
         init_stmts = []
         init_stmts.extend(self._build_iter_node())
-        init_stmts.append(self._build_index_init_node())
         init_stmts.append(self._build_var_len_assign_node())
-
+        init_stmts.append(self._build_index_init_node())
         compare_node = self._build_compare_node()
         step_node = self._build_step_node()
         cond_stmt = self._build_cond_stmt(step_node, compare_node)

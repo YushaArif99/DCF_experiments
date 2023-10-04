@@ -1,7 +1,7 @@
 from .helpers import gast
 
 def create_undefined_var(name):
-    func_code = f"{name} = None"
+    func_code = f"{name} = dy2s.UndefinedVar('{name}')"
     return gast.parse(func_code).body[0]
 
 
