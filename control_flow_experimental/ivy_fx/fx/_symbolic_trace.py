@@ -1496,7 +1496,10 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
             for k, v in loop_vars.items():
                 if isinstance(v, Proxy):
                     proxy_inputs.append(v)
-                    concr_args[k] = v.data
+                    concr_args[k] = v._meta_tensor
+                elif isinstance(v, dy2s.UndefinedVar) or "__for_loop_" in k: 
+                    # for loop locals that need to be tracked
+                    concr_args[k] = v
                 else:
                     const_args[k] = v
 
@@ -1505,13 +1508,14 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
                 frontend = proxy_inputs[0].frontend
             else:
                 frontend = None
-            test_g = t.trace(test_fn, constant_args=const_args, args=[], to_ivy=to_ivy, frontend=frontend, **concr_args)
+            test_g = t.trace(test_fn, constant_args=const_args, args=list(concr_args.values()), to_ivy=to_ivy, frontend=frontend)
             test = t.orig_ret
             try:
                 test = test[0] if isinstance(test, (list, tuple)) else test
             except IndexError:
                 test = False
-            if not isinstance(test, Proxy):  # static control flow
+            iter_ = [v for k,v in loop_vars.items() if "__for_loop_iter" in k]
+            if not isinstance(test, Proxy) or _find_proxy(iter_) is None:  # static control flow
                 # defer to pythonic while loop
                 return _py_whileloop(test_fn, body_fn, loop_vars.values())
             else:
@@ -1519,7 +1523,7 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
                 subgs = [test_g]
                 t = Tracer(name="body_fn")
                 graph = t.trace(
-                    body_fn, constant_args=const_args, args=[], to_ivy=to_ivy, frontend=frontend, **concr_args
+                    body_fn, constant_args=const_args, args=list(concr_args.values()), to_ivy=to_ivy, frontend=frontend
                 )
                 subgs.append(graph)
 
@@ -1527,7 +1531,7 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
             proxy = _find_proxy(args, kwargs)
             if proxy is not None:
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=proxy._meta_tensor, to_ivy=to_ivy
+                    "call_function", orig_fn, args, kwargs, data=tuple(), proxy_type=ProxyType.BUILTIN_PROXY, to_ivy=to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return_proxy.node.meta["orig_ret"] = ret
@@ -1546,23 +1550,26 @@ def _dummy_tracing_func(orig_fn, to_ivy=False):
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
-                if hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.CREATION_FUNCS[ivy.current_backend_str()] + glob.CREATION_FUNCS["numpy"]:
-                    # creation functions (eg: asarray, eye, linspace) modify the input types
-                    # i.e (int/float/Sequence[ints] => NativeArray)
-                    # we therefore need to execute the orig_fn to get the new native array
-                    # which will be used to create the corresponding native proxy
-
-                    # get the concrete args/kwargs. Also handle conversions for NewNDArrays
-                    nargs, nkwargs = ivy.nested_map(lambda a: _from_ND(a._meta_tensor) if isinstance(a, Proxy) else a, [args,kwargs],shallow=False)
-                    ret = orig_fn(*nargs, **nkwargs)
-                    data = ivy.nested_map(lambda a: _to_ND(a), ret, shallow=False,)
-                elif hasattr(orig_fn, '__qualname__') and orig_fn.__qualname__ in glob.ARRAY_TO_SCALAR_FUNCS["numpy"]:
-                    data = 10 #TODO: remove this hardcoding
-                else:
-                    data = proxy._meta_tensor
-
+                def determine_proxy_type_and_val(orig_fn, proxy):
+                    fn_name = getattr(orig_fn, '__qualname__') 
+                    backend = ivy.current_backend_str()
+                    if fn_name in glob.BUILTIN_SIDE_EFFECTS:
+                        proxy_type, val = ProxyType.BUILTIN_PROXY, glob.BUILTIN_SIDE_EFFECTS[fn_name]
+                    elif fn_name in glob.SCALAR_SIDE_EFFECTS:
+                        proxy_type, val = ProxyType.SCALAR_PROXY, glob.SCALAR_SIDE_EFFECTS[fn_name]
+                    elif fn_name in glob.ARRAY_TO_SCALAR[backend]:
+                        proxy_type, val = ProxyType.SCALAR_PROXY, ivy.native_array([])
+                    elif fn_name in glob.SCALAR_TO_ARRAY[backend]:
+                        proxy_type, val = ProxyType.NATIVE_PROXY, ivy.native_array([])
+                    elif fn_name in glob.ARRAY_TO_NUMPY[backend]:
+                        proxy_type, val = ProxyType.NDARRAY_PROXY, _to_ND(ivy.native_array([]))
+                    else:
+                        proxy_type, val = ProxyType.NATIVE_PROXY, proxy._meta_tensor
+                    return proxy_type, val
+                
+                proxy_type, val = determine_proxy_type_and_val(orig_fn, proxy)
                 return_proxy = proxy.tracer.create_proxy(
-                    "call_function", orig_fn, args, kwargs, data=data, to_ivy=to_ivy
+                    "call_function", orig_fn, args, kwargs, data=val, proxy_type=proxy_type, to_ivy=to_ivy
                 )
                 return_proxy.node.meta["is_wrapped"] = True
                 return return_proxy

@@ -31,6 +31,7 @@ from .immutable_collections import Constant
 import ivy
 import graph_compiler.globals as glob
 from graph_compiler.conversion import _to_ND
+import control_flow_experimental.dy2static as dy2s
 # import frontend tensors
 from ivy.functional.frontends.torch import Tensor
 from ivy.functional.frontends.jax import DeviceArray
@@ -343,7 +344,7 @@ class TracerBase:
             return a.__name__
         elif isinstance(a, base_types) or a is None or a is ...:
             return a
-        return Constant(a)
+        return Constant(None) if isinstance(a, dy2s.UndefinedVar) else Constant(a)
         raise NotImplementedError(f"argument of type: {type(a)}")
 
     @compatibility(is_backward_compatible=True)
@@ -848,7 +849,7 @@ class ScalarProxy(Proxy):
             return native_attr
 
 @compatibility(is_backward_compatible=True)
-class BuiltinProxy(IvyProxy):
+class BuiltinProxy(Proxy):
     """
     A special proxy which lets "shape","dtype","size", and a few other
     attribute accesses pass through to our underlying  Ivy API,
@@ -856,20 +857,24 @@ class BuiltinProxy(IvyProxy):
     """
 
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
-        native_arr = ivy.native_array([])
-        native_proxy = NativeProxy(node, tracer, native_arr) 
-        super(BuiltinProxy, self).__init__(node, tracer, native_arr, native_proxy=native_proxy) 
+        super(BuiltinProxy, self).__init__(node, tracer, data)  
         self._collection = data
+        self._array = ivy.array([])
 
     def __repr__(self):
         return f"BuiltinProxy({self.node.name})"
     
     def __getattr__(self, k) -> "NativeAttribute":
-        native_attr = getattr(self._collection, k)
-        if callable(native_attr):
-            return NativeAttribute(self, getattr(type(self._collection), k))
-        else:
-            return native_attr
+        try: 
+            native_attr = getattr(self._collection, k)
+            if callable(native_attr):
+                return NativeAttribute(self, getattr(type(self._collection), k))
+        except AttributeError:
+            native_attr = getattr(self._array, k)
+            if callable(native_attr):
+                return NativeAttribute(self, getattr(type(self._array), k))
+        
+        return native_attr
 
 @compatibility(is_backward_compatible=False)
 class ParameterProxy(Proxy):
@@ -1009,7 +1014,7 @@ def _get_proxy_type(data):
         return ProxyType.DTYPE_PROXY
     elif ivy.isscalar(data):
         return ProxyType.SCALAR_PROXY
-    elif isinstance(data, (list, tuple, dict, set)):
+    elif isinstance(data, (list, tuple, dict, set, range, enumerate, zip)):
         return ProxyType.BUILTIN_PROXY
     #TODO: add check for handling shapes
     else:
