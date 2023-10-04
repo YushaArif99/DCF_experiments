@@ -23,6 +23,7 @@ from .loop_transformer import LoopTransformer
 from .return_transformer import ReturnTransformer
 from .typehint_transformer import TypeHintTransformer
 from .docstrings_removal import DocstringTransformer
+from .comprehensions_transformer import ListCompTransformer
 from .utils import ast_to_source_code
 
 __all__ = []
@@ -73,8 +74,9 @@ class DygraphToStaticAst(BaseTransformer):
         self.visit(node)
 
         transformers = [
-            DocstringTransformer,
+            DocstringTransformer, # remove all docstrings from function
             EarlyReturnTransformer,
+            ListCompTransformer,
             BreakContinueTransformer,  # break/continue in loops
             ReturnTransformer,  # return in functions
             LogicalTransformer,  # logical and/or/not
