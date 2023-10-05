@@ -954,8 +954,12 @@ for method in inplace_methods:
     def _scope(method):
         def impl(*args, **kwargs):
             tracer = args[0].tracer
-            data = args[0]._meta_tensor
-            target = getattr(operator, method)
+            data = args[0]._meta_tensor 
+            method_ = f"__{method.strip('_')}__"
+            try:
+                target = getattr(data, method_)
+            except AttributeError:
+                target = getattr(operator, method_)
             return tracer.create_proxy(
                 "call_function", target, args, kwargs, data=data, proxy_type=_get_proxy_type(data)
             )
@@ -1008,7 +1012,7 @@ for method in inplace_methods:
     _scope(method)
 
 def _get_proxy_type(data):
-    if ivy.is_array(data):
+    if ivy.is_array(data) or data is None:
         return ProxyType.NATIVE_PROXY
     elif ivy.is_native_dtype(data):
         return ProxyType.DTYPE_PROXY

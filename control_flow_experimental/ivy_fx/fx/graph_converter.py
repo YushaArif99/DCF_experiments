@@ -243,7 +243,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     inplace_fn = False
     if (
         fn.__name__
-        in ["__setattr__", "setitem"]
+        in ["__setattr__", "__setitem__"]
         + glob.INPLACE_METHODS_WITHOUT_RET[target_framework]
         + glob.INPLACE_FUNCTIONS_WITHOUT_RET[target_framework]
     ) or (
@@ -357,8 +357,8 @@ def _create_ivy_fn(node, to_ivy=False):
                 graph,
                 fn=node.target,
                 ret=node,
-                args=list(node.args[3].values()),
-                kwargs={},
+                args=[],
+                kwargs=node.args[3],
                 to_ivy=to_ivy,
             )
             if_else_node.subgraphs = subgraphs
