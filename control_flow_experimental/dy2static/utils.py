@@ -852,7 +852,7 @@ class FunctionNameLivenessAnalysis(gast.NodeVisitor):
         write_context = (gast.Store, gast.AugStore, gast.Del)
         if isinstance(node.ctx, write_context):
             self._current_name_scope().w_vars.add(node.id)
-        elif isinstance(node.ctx, gast.Load) and node.id not in ['enumerate', 'range']:
+        elif isinstance(node.ctx, gast.Load) and node.id not in ['enumerate', 'range', 'zip']:
             self._current_name_scope().r_vars.add(node.id)
     def visit_FunctionDef(self, node):
         def pre_func():

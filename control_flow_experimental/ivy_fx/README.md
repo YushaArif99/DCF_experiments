@@ -152,7 +152,7 @@ Symbolic Tracing has limitations in that it can't deal with dynamic control flow
 
 - ~~Adding support for symbolically tracing compiled Ivy Graphs (for the use case of transpilations).~~(DONE)
 - Integrating symbolic tracing as a fallback mechanism in the `control_flow_v1` branch
-- Rigorously testing symbolic tracing on the entire Ivy API to ensure compatibility.
-- Adding support for tracing python for loops
+- Rigorously testing symbolic tracing on the entire Ivy API to ensure robustness and compatibility.
+- ~~Adding support for tracing python for loops~~ (DONE)
 - Finishing all the minor TODOs mentioned in the `_symbolic_tracer.py` file.
 
