@@ -195,6 +195,15 @@ class SingleReturnTransformer(BaseTransformer):
         assert value in [True, False], "value must be True or False."
         if isinstance(parent_node_of_return, gast.If):
             # Prepend control flow boolean nodes such as '__return@1 = True'
+            
+            # handle the case when the predicate is simply a variable
+            # check. If so, convert it into a boolean comparison
+            if isinstance(parent_node_of_return.test, gast.Name):
+                parent_node_of_return.test = gast.Compare(
+                    left=parent_node_of_return.test,
+                    ops=[gast.Is()],
+                    comparators=[gast.Constant(value=True, kind=None)]
+                )
             node_str = "{} = {}".format(
                 return_name,
                 ast_to_source_code(parent_node_of_return.test).strip(),

@@ -63,10 +63,12 @@ class IfElseTransformer(BaseTransformer):
             true_func_node,
             false_func_node,
             cond_vars,
+            modified_vars,
         ) = transform_if_else(node, self.root)
 
         new_node = create_convert_ifelse_node(
             cond_vars,
+            modified_vars,
             pred_func_node,
             true_func_node,
             false_func_node,
@@ -91,7 +93,7 @@ class IfElseTransformer(BaseTransformer):
         visitor.visit(node)
         ifexpr_vars = list(visitor.name_ids.keys())
         new_node = create_convert_ifelse_node(
-            ifexpr_vars, node.test, node.body, node.orelse, True
+            ifexpr_vars,[], node.test, node.body, node.orelse, True
         )
         # Note: A blank line will be added separately if transform gast.Expr
         # into source code. Using gast.Expr.value instead to avoid syntax error
@@ -342,12 +344,14 @@ def transform_if_else(node, root):
     """
 
     # TODO(liym27): Consider variable like `self.a` modified in if/else node.
-    return_name_ids = sorted(node.ivy_scope.modified_vars())
+    write_name_ids = sorted(node.ivy_scope.modified_vars())
+    read_name_ids = sorted(node.ivy_scope.read_vars())
     push_pop_ids = sorted(node.ivy_scope.variadic_length_vars())
-    nonlocal_names = list(return_name_ids + push_pop_ids)
+    
+    nonlocal_names = list(set(write_name_ids + read_name_ids + push_pop_ids))
     nonlocal_names.sort()
-    # NOTE: All var in return_name_ids should be in nonlocal_names.
-    nonlocal_names = _valid_nonlocal_names(return_name_ids, nonlocal_names)
+    # NOTE: All var in write_name_ids should be in nonlocal_names.
+    nonlocal_names = _valid_nonlocal_names(write_name_ids, nonlocal_names)
 
     # TODO(dev): Need a better way to deal this.
     # LoopTransformer will create some special vars, which is not visiable by users. so we can sure it's safe to remove them.
@@ -382,7 +386,14 @@ def transform_if_else(node, root):
         defaults=[],
     )
 
-    
+    # handle the case when the predicate is simply a variable
+    # check. If so, convert it into a boolean comparison
+    if isinstance(node.test, gast.Name):
+        node.test = gast.Compare(
+            left=node.test,
+            ops=[gast.Is()],
+            comparators=[gast.Constant(value=True, kind=None)]
+        )
     pred_func_node = create_funcDef_node(
         [gast.Return(value=node.test)],
         name=unique_name.generate(PRED_FUNC_PREFIX),
@@ -407,11 +418,13 @@ def transform_if_else(node, root):
         true_func_node,
         false_func_node,
         cond_vars,
+        write_name_ids
     )
 
 
 def create_convert_ifelse_node(
     cond_vars,
+    modified_vars,
     pred_func,
     true_func,
     false_func,
@@ -431,18 +444,18 @@ def create_convert_ifelse_node(
             pred_fn=pred_func_source,
             true_fn=true_func_source,
             false_fn=false_func_source,
-            dict_vars=ast_to_source_code(create_dict_node(cond_vars)),
+            dict_vars=ast_to_source_code(create_dict_node(cond_vars,modified_vars, prefix="__cond_")),
         )
     else:
         pred_func_source = pred_func.name
         true_func_source = true_func.name
         false_func_source = false_func.name
-        convert_ifelse_fn = '{tuple_vars} = ivy.if_else({pred_fn}, {true_fn}, {false_fn}, vars={dict_vars})'.format(
+        convert_ifelse_fn = '{tuple_vars} = ivy.if_else({pred_fn}, {true_fn}, {false_fn},{dict_vars})'.format(
             tuple_vars =ast_to_source_code(create_tuple_node(cond_vars)).strip('\n'),
             pred_fn=pred_func_source,
             true_fn=true_func_source,
             false_fn=false_func_source,
-            dict_vars=ast_to_source_code(create_dict_node(cond_vars)),
+            dict_vars=ast_to_source_code(create_dict_node(cond_vars, modified_vars, prefix="__cond_")),
         )
 
     convert_ifelse_fn = gast.parse(convert_ifelse_fn).body[0]

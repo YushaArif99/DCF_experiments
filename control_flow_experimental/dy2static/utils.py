@@ -852,7 +852,7 @@ class FunctionNameLivenessAnalysis(gast.NodeVisitor):
         write_context = (gast.Store, gast.AugStore, gast.Del)
         if isinstance(node.ctx, write_context):
             self._current_name_scope().w_vars.add(node.id)
-        elif isinstance(node.ctx, gast.Load) and node.id not in ['enumerate', 'range', 'zip']:
+        elif isinstance(node.ctx, gast.Load) and node.id not in ['enumerate', 'range', 'zip', 'dy2s']:
             self._current_name_scope().r_vars.add(node.id)
     def visit_FunctionDef(self, node):
         def pre_func():
@@ -1072,7 +1072,7 @@ def create_nonlocal_stmt_nodes(names):
     func_code = "nonlocal {}".format(','.join(names))
     return [gast.parse(func_code).body[0]]
         
-def create_dict_node(names, modified_vars=[]):
+def create_dict_node(names, modified_vars=[], prefix='__for_loop_'):
     assert isinstance(names, (list, tuple))
     assert isinstance(modified_vars, (set,list))
 
@@ -1087,7 +1087,7 @@ def create_dict_node(names, modified_vars=[]):
     key_nodes = []
     value_nodes = []
     for var_name in names:
-        val = f"__for_loop_{var_name}" if var_name in modified_vars else str(var_name)
+        val = f"{prefix + var_name}" if var_name in modified_vars else str(var_name)
         key_node = gast.Constant(value=val, kind=None)
         value_node = gast.Name(
             id=str(var_name), ctx=gast.Load(), annotation=None, type_comment=None

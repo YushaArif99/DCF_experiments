@@ -642,15 +642,15 @@ class LoopTransformer(BaseTransformer):
         return new_stmts
 
     def get_while_stmt_nodes(self, node):
-        loop_var_names, create_var_names = (
+        write_var_names, read_var_names = (
             node.ivy_scope.modified_vars(),
-            node.ivy_scope.created_vars(),
+            node.ivy_scope.created_vars() | node.ivy_scope.read_vars(),
         )
         push_pop_names = list(node.ivy_scope.variadic_length_vars())
         new_stmts = []
 
         # create non-local statement for body and cond.
-        nonlocal_names = list(loop_var_names | create_var_names | set(push_pop_names))
+        nonlocal_names = list(write_var_names | read_var_names | set(push_pop_names))
         nonlocal_names.sort()
         # TODO(dev): Need a better way to deal this.
         if ARGS_NAME in nonlocal_names:
@@ -710,6 +710,7 @@ class LoopTransformer(BaseTransformer):
             condition_func_node.name,
             body_func_node.name,
             nonlocal_names,
+            write_var_names
         )
         new_stmts.extend(while_loop_nodes)
         return new_stmts

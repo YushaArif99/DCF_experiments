@@ -79,12 +79,12 @@ class DygraphToStaticAst(BaseTransformer):
             ListCompTransformer,
             BreakContinueTransformer,  # break/continue in loops
             ReturnTransformer,  # return in functions
-            LogicalTransformer,  # logical and/or/not
             CreateVariableTransformer,  # create undefined var for if / while / for
             LoopTransformer,  # for/while -> while_op
             IfElseTransformer,  # if/else -> cond_op
             AssertTransformer,  # assert statement
             CallTransformer,  # transform call recursively
+            LogicalTransformer,  # logical and/or/not
             CastTransformer,  # type casting statement
             DecoratorTransformer,  # transform decorators to function call
             TypeHintTransformer,  # remove all typehint in gast.Name
