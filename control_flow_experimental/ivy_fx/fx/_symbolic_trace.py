@@ -1447,7 +1447,7 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
                 pred = False
             if not isinstance(pred, Proxy):  # static control flow
                 # defer to pythonic if-else
-                return args[1](**cond_vars) if pred else args[2](**cond_vars)
+                return args[1](*cond_vars.values()) if pred else args[2](*cond_vars.values())
             else:
                 # compile both branches since the control flow is dynamic
                 subgs = [pred_g]
@@ -1475,13 +1475,6 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
                 return_proxy.node.meta["subgraphs"] = subgs
                 return return_proxy
             return ret
-
-    elif orig_fn.__name__ == "for_loop":
-        """TODO (yusha): add tracing logic for 'for-loops'"""
-
-        @functools.wraps(orig_fn)
-        def wrapped(*args, **kwargs):
-            pass
 
     elif orig_fn.__name__ == "while_loop":
 
