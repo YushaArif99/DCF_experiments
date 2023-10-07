@@ -1390,6 +1390,11 @@ def _py_whileloop(test_fn, body_fn, body_vars):
 
     return body_vars
 
+def _py_if_else(pred, true_fn, false_fn, cond_vars):
+    if pred:
+        return true_fn(*cond_vars)
+    else:
+        return false_fn(*cond_vars)
 
 def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
     """
@@ -1425,7 +1430,7 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
             # Trace the callables passed as arguments to the control flow op
             ret = None
             subgs = []
-            cond_vars = args[3]
+            pred_fn, true_fn, false_fn, cond_vars = args
             const_args, concr_args, proxy_inputs = {}, {}, []
             for k, v in cond_vars.items():
                 if isinstance(v, Proxy):
@@ -1438,8 +1443,10 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
                 else:
                     const_args[k] = v
 
+            # check for static control flow
             t = Tracer(name="pred_fn")
-            pred_g = t.trace(args[0], constant_args=const_args, args=list(concr_args.values()), to_ivy=to_ivy, frontend=frontend)
+            orig_vars = {key.replace("__cond_", ""): value for key, value in cond_vars.items()}
+            pred_g = t.trace(pred_fn, constant_args=orig_vars, args=(), to_ivy=to_ivy, frontend=frontend)
             pred = t.orig_ret
             try:
                 pred = pred[0] if isinstance(pred, (list, tuple)) else pred
@@ -1447,15 +1454,14 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
                 pred = False
             if not isinstance(pred, Proxy):  # static control flow
                 # defer to pythonic if-else
-                return args[1](*cond_vars.values()) if pred else args[2](*cond_vars.values())
+                return _py_if_else(pred, true_fn, false_fn, cond_vars.values())
             else:
                 # compile both branches since the control flow is dynamic
-                subgs = [pred_g]
-                for arg in args[1:]:
-                    if inspect.isfunction(arg):
-                        t = Tracer(name=f"{arg.__name__}")
+                for fn in args:
+                    if inspect.isfunction(fn):
+                        t = Tracer(name=f"{fn.__name__}")
                         graph = t.trace(
-                            arg,
+                            fn,
                             constant_args=const_args,
                             to_ivy= to_ivy,
                             frontend=frontend,
@@ -1489,31 +1495,43 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
                 if isinstance(v, Proxy):
                     proxy_inputs.append(v)
                     concr_args[k] = v._meta_tensor
-                elif isinstance(v, dy2s.UndefinedVar) or "__for_loop_" in k: 
+                elif isinstance(v, dy2s.UndefinedVar) or any([substr in k for substr in ("__for_loop_", "__modified_")]): 
                     # for loop locals that need to be tracked
                     concr_args[k] = v
                 else:
                     const_args[k] = v
-
+            # check for static control flow
+            #TODO: find a more efficient way of determining this. Currently,
+            # we run a single iteration of the loop to determine whether any
+            # loop vars returned are proxies. If not, the loop is static.
+            orig_vars = {key.replace("__modified_", ""): value for key, value in loop_vars.items()}
+            t = Tracer(name="body_fn")
+            body_g = t.trace(body_fn, constant_args=orig_vars, args=(), to_ivy=to_ivy, frontend=frontend)
+            new_vars = {k1: v2 for (k1, v1), v2 in zip(orig_vars.items(),t.orig_ret)} # new loop vars
             t = Tracer(name="test_fn")
-            test_g = t.trace(test_fn, constant_args=const_args, args=list(concr_args.values()), to_ivy=to_ivy, frontend=frontend)
+            test_g = t.trace(test_fn, constant_args= new_vars, args=(), to_ivy=to_ivy, frontend=frontend)
             test = t.orig_ret
             try:
                 test = test[0] if isinstance(test, (list, tuple)) else test
             except IndexError:
-                test = False
-            iter_ = [v for k,v in loop_vars.items() if "__for_loop_iter" in k]
-            if not isinstance(test, Proxy) or _find_proxy(iter_) is None:  # static control flow
+                test = False 
+            iter_ = next((v for k, v in loop_vars.items() if "__for_loop_iter" in k), None)
+            if not isinstance(test, Proxy) or (iter_ is not None and _find_proxy(iter_) is None):  # static control flow
                 # defer to pythonic while loop
                 return _py_whileloop(test_fn, body_fn, loop_vars.values())
             else:
                 # compile both callables since the control flow is dynamic
-                subgs = [test_g]
-                t = Tracer(name="body_fn")
-                graph = t.trace(
-                    body_fn, constant_args=const_args, args=list(concr_args.values()), to_ivy=to_ivy, frontend=frontend
-                )
-                subgs.append(graph)
+                for fn in args:
+                    if inspect.isfunction(fn):
+                        t = Tracer(name=f"{fn.__name__}")
+                        graph = t.trace(
+                            fn,
+                            constant_args=const_args,
+                            to_ivy= to_ivy,
+                            frontend=frontend,
+                            args=list(concr_args.values()),
+                        )
+                        subgs.append(graph)
 
             ret = t.orig_ret
             proxy = _find_proxy(args, kwargs)

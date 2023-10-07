@@ -176,8 +176,13 @@ def convert_to_f_string(func, *args):
                 f_string += str(arg)
         f_string += ")"
     else:
+        # check if the function is a unary operation
+        if func.__name__ == 'unary_not':
+            f_string = f"{op} {args[0][0]}"
+            return f_string 
+            
         # construct the f string for the boolean operators
-        f_string = "("
+        f_string = ""
         for arg in args:
             # check if the argument is a list or tuple
             if isinstance(arg, (list, tuple)):
@@ -190,7 +195,6 @@ def convert_to_f_string(func, *args):
             f_string += f" {op} "
         # remove the extra operator at the end
         f_string = f_string[: -len(op) - 2]
-        f_string += ")"
     return f_string
 
 transform_funcs = {

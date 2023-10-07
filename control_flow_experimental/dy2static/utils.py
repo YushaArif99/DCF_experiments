@@ -1072,7 +1072,7 @@ def create_nonlocal_stmt_nodes(names):
     func_code = "nonlocal {}".format(','.join(names))
     return [gast.parse(func_code).body[0]]
         
-def create_dict_node(names, modified_vars=[], prefix='__for_loop_'):
+def create_dict_node(names, modified_vars=[], prefix='__modified_'):
     assert isinstance(names, (list, tuple))
     assert isinstance(modified_vars, (set,list))
 
