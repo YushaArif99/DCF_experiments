@@ -132,13 +132,26 @@ class ForLoopTuplePreTransformer(BaseTransformer):
         self.visit(self.root)
 
     def visit_For(self, node):
+        def is_range(node):
+            if isinstance(node, gast.Call) and isinstance(node.func, gast.Name) and node.func.id == 'range':
+                return True
+            for child in gast.iter_child_nodes(node):
+                if is_range(child):
+                    return True
+            return False
+        
         self.generic_visit(node)
         tuple_target = unique_name.generate(FOR_ITER_TARGET_PREFIX)
         tuple_iterator = unique_name.generate(FOR_ITER_ITERATOR_PREFIX)
         origin_tuple_node = node.target
-        assign_iterator_node = gast.parse(
-            f"{tuple_iterator} = list({ast_to_source_code(node.iter).strip()})"
-        ).body[0]
+        if not is_range(node.iter):
+            assign_iterator_node = gast.parse(
+                f"{tuple_iterator} = list({ast_to_source_code(node.iter).strip()})"
+            ).body[0]
+        else:
+            assign_iterator_node = gast.parse(
+                f"{tuple_iterator} = {ast_to_source_code(node.iter).strip()}"
+            ).body[0]
         node.target = gast.Name(
             id=tuple_target,
             ctx=gast.Store(),

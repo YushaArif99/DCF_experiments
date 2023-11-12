@@ -23,7 +23,9 @@ from .loop_transformer import LoopTransformer
 from .return_transformer import ReturnTransformer
 from .typehint_transformer import TypeHintTransformer
 from .docstrings_removal import DocstringTransformer
-from .comprehensions_transformer import ListCompTransformer
+from .comprehensions_transformer import CompTransformer
+from .implicit_class_transformer import ImplicitToExplicitTransformer
+from .starred_assign_transformer import StarredToRegularTransformer
 from .utils import ast_to_source_code
 
 __all__ = []
@@ -73,10 +75,12 @@ class DygraphToStaticAst(BaseTransformer):
         # Generic transformation
         self.visit(node)
 
-        transformers = [
+        transformers =  [
+            StarredToRegularTransformer, # starred unpacking
             DocstringTransformer, # remove all docstrings from function
             EarlyReturnTransformer,
-            ListCompTransformer,
+            CompTransformer,
+            ImplicitToExplicitTransformer,
             BreakContinueTransformer,  # break/continue in loops
             ReturnTransformer,  # return in functions
             CreateVariableTransformer,  # create undefined var for if / while / for
@@ -89,7 +93,7 @@ class DygraphToStaticAst(BaseTransformer):
             DecoratorTransformer,  # transform decorators to function call
             TypeHintTransformer,  # remove all typehint in gast.Name
         ]
-
+        transformers = []
         apply_optimization(transformers)
 
         for index, transformer in enumerate(transformers):
