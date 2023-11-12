@@ -1,6 +1,6 @@
 import ast
 
-import astor
+from .helpers import astor
 
 from .helpers import gast
 
