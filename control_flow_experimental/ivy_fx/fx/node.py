@@ -644,9 +644,9 @@ def map_aggregate(a: Argument, fn: Callable[[Argument], Argument]) -> Argument:
         # Support NamedTuple (if it has `_fields`) by repacking into original type.
         return t if not hasattr(a, '_fields') else type(a)(*t)
     elif isinstance(a, list):
-        return immutable_list(map_aggregate(elem, fn) for elem in a)
+        return list(map_aggregate(elem, fn) for elem in a)
     elif isinstance(a, dict):
-        return immutable_dict((k, map_aggregate(v, fn)) for k, v in a.items())
+        return dict((map_aggregate(k, fn), map_aggregate(v, fn)) for k, v in a.items())
     elif isinstance(a, slice):
         return slice(map_aggregate(a.start, fn), map_aggregate(a.stop, fn), map_aggregate(a.step, fn))
     else:

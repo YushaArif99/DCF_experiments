@@ -188,12 +188,6 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     if with_dependent_parameters:
         [glob.dependent_ids.add(id_) for id_ in node.output_param_ids]
 
-    # (post-processing):convert slice-lists back to slices
-    args = ivy.map_nest_at_indices(args, arg_tracked_slices_idxs, tvp.list_to_slice)
-    kwargs = ivy.map_nest_at_indices(
-        kwargs, kwarg_tracked_slices_idxs, tvp.list_to_slice
-    )
-
     ###################################
     #  handling additional attributes #
     ###################################
@@ -243,7 +237,7 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     inplace_fn = False
     if (
         fn.__name__
-        in ["__setattr__", "__setitem__"]
+        in ["__setattr__", "__setitem__", "append", "extend", "insert", "pop", "sort", "reverse", "remove", "update"]
         + glob.INPLACE_METHODS_WITHOUT_RET[target_framework]
         + glob.INPLACE_FUNCTIONS_WITHOUT_RET[target_framework]
     ) or (
@@ -258,6 +252,8 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
     node.backend_fn = backend_fn
     if backend_fn in FUNC_TO_PATH:
             node.path = FUNC_TO_PATH[backend_fn]
+    else:
+        node.path = backend_fn.__qualname__ if hasattr(backend_fn, '__qualname__') else backend_fn.__name__
     try:
         sig = inspect.signature(backend_fn)
         sig_keys = list(sig.parameters.keys())
@@ -303,21 +299,20 @@ def log_ivy_fn(graph, fn, ret, args, kwargs, arg_stateful_idxs=[], kwarg_statefu
         include_derived=True,
         shallow=False,
     )
-    # Todo: remove this hacky patch if possible
-    # this fix is needed because Proxy Nodes are of type immutable lists.
-    # We therefore convert these to mutable lists to allow inplace updates
-
-    to_mutable_list = (
-        lambda t: list(to_mutable_list(x) for x in t)
-        if isinstance(t, (tuple, list))
-        else t
-    )
-    new_args = ivy.nested_map(
-        to_mutable_list, new_args, include_derived=False, shallow=False
-    )
-    new_kwargs = ivy.nested_map(
-        to_mutable_list, new_kwargs, include_derived=False, shallow=False
-    )
+    # #TODO(yusha): remove this hacky patch if possible
+    # # this fix is needed because Proxy Nodes are of type immutable types.
+    # # We therefore convert these to mutable lists to allow inplace updates
+    # to_mutable_list = (
+    #     lambda t: list(to_mutable_list(x) for x in t)
+    #     if isinstance(t, (tuple, list))
+    #     else t
+    # )
+    # new_args = ivy.nested_map(
+    #     to_mutable_list, new_args, include_derived=False, shallow=False
+    # )
+    # new_kwargs = ivy.nested_map(
+    #     to_mutable_list, new_kwargs, include_derived=False, shallow=False
+    # )
     node.args = new_args
     node.kwargs = new_kwargs
 
@@ -527,6 +522,7 @@ def _create_graph(
     if ivy_graph._id_to_function:
         # connect the graph
         ivy_graph.connect()
+        ivy_graph._functions = sorted(ivy_graph._functions, key=lambda fn: fn.timestamp)
 
     return ivy_graph
 
