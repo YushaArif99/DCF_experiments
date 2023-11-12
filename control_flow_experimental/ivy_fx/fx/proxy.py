@@ -5,6 +5,7 @@ import inspect
 import operator
 import collections
 import functools
+import builtins
 from enum import Enum
 from numbers import Number
 """TODO: remove torch dependencies."""
@@ -50,6 +51,8 @@ __all__ = [
     "IvyProxy",
 ]
 
+class ProxyDataError(Exception):
+    pass
 
 @compatibility(is_backward_compatible=False)
 class Scope:
@@ -118,9 +121,16 @@ class ProxyType(Enum):
     SHAPE_PROXY = 4
     DTYPE_PROXY = 5
     SCALAR_PROXY = 6
-    BUILTIN_PROXY = 7
-    NDARRAY_PROXY = 8
-    UNDEFINED_PROXY = 9
+    LIST_PROXY = 8
+    DICT_PROXY = 9
+    TUPLE_PROXY = 10
+    SET_PROXY = 11
+    ENUMERATE_PROXY = 12
+    ZIP_PROXY = 13
+    RANGE_PROXY = 14
+    NDARRAY_PROXY = 15
+    UNDEFINED_PROXY = 16
+    EAGER_PROXY = 17
 
 class ProxyFactory:
     def __init__(self, to_ivy, frontend, with_numpy):
@@ -130,9 +140,6 @@ class ProxyFactory:
     
     def create_scalar_proxy(self,node, tracer, data):
         return ScalarProxy(node, tracer, data) 
-    
-    def create_builtin_proxy(self,node, tracer, data):
-        return BuiltinProxy(node, tracer, data) 
     
     def create_array_proxy(self,node, tracer, data):
         native_proxy = NativeProxy(node, tracer, native_data=data) 
@@ -145,9 +152,13 @@ class ProxyFactory:
         return native_proxy
     
     def create_shape_proxy(self,node, tracer, data):
-        pass 
+        shape_proxy = ShapeProxy(node, tracer, shape=data)
+        if self.to_ivy:
+            return IvyShapeProxy(node, tracer, shape=data, shape_proxy=shape_proxy, to_ivy=True)  
     def create_dtype_proxy(self,node, tracer, data):
-        pass 
+        dtype_proxy = DtypeProxy(node, tracer, dtype=data)
+        if self.to_ivy:
+            return IvyDtypeProxy(node, tracer, shape=data, dtype_proxy=dtype_proxy, to_ivy=True) 
 
 @compatibility(is_backward_compatible=True)
 class TracerBase:
@@ -219,14 +230,30 @@ class TracerBase:
 
         if proxy_type == ProxyType.SCALAR_PROXY:
             return factory.create_scalar_proxy(node, self, data)
-        if proxy_type == ProxyType.BUILTIN_PROXY:
-            return factory.create_builtin_proxy(node, self, data)
         elif proxy_type == ProxyType.DTYPE_PROXY:
             return factory.create_dtype_proxy(node, self, data)
         elif proxy_type == ProxyType.SHAPE_PROXY:
             return factory.create_shape_proxy(node,self,data)
         elif proxy_type == ProxyType.UNDEFINED_PROXY:
             return Proxy(node, self, data)
+        elif proxy_type == ProxyType.EAGER_PROXY:
+            return EagerProxy(node, self, data)
+        elif proxy_type == ProxyType.LIST_PROXY:
+            return ListProxy(node, self, data)
+        elif proxy_type == ProxyType.DICT_PROXY:
+            return DictProxy(node, self, data)
+        elif proxy_type == ProxyType.TUPLE_PROXY:
+            return TupleProxy(node, self, data)
+        elif proxy_type == ProxyType.SET_PROXY:
+            return SetProxy(node, self, data)
+        elif proxy_type == ProxyType.ENUMERATE_PROXY:
+            data = (data,) if not isinstance(data, tuple) else data
+            return EnumerateProxy(node, self, *data)
+        elif proxy_type == ProxyType.ZIP_PROXY:
+            return ZipProxy(node, self, *data)
+        elif proxy_type == ProxyType.RANGE_PROXY:
+            data = (data,) if not isinstance(data, tuple) else data
+            return RangeProxy(node, self, *data)
         else:
             if data is None: 
                 data = ivy.native_array([]) 
@@ -304,14 +331,14 @@ class TracerBase:
                 # we iterate through the key with map_aggregate
                 k = self.create_arg(k)
 
-                def no_node(arg):
-                    if isinstance(arg, Node):
-                        raise RuntimeError(
-                            "Keys for dictionaries used as an argument cannot contain a "
-                            f"Node. Got key: {k}"
-                        )
+                # def no_node(arg):
+                #     if isinstance(arg, Node):
+                #         raise RuntimeError(
+                #             "Keys for dictionaries used as an argument cannot contain a "
+                #             f"Node. Got key: {k}"
+                #         )
 
-                map_aggregate(k, no_node)
+                # map_aggregate(k, no_node)
 
                 r[k] = self.create_arg(v)
             return r
@@ -375,14 +402,6 @@ class TracerBase:
             " Proxy docstring for help troubleshooting "
             "Proxy iteration errors"
         )
-
-    @compatibility(is_backward_compatible=True)
-    def keys(self, obj: "Proxy") -> Any:
-        """Called when a proxy object is has the keys() method called.
-        This is what happens when ** is called on a proxy. This should return an
-        iterator it ** is suppose to work in your custom tracer.
-        """
-        return Attribute(obj, "keys")()
 
 
 # used in Proxy object when just appending to the graph while not tracing.
@@ -456,10 +475,10 @@ class Proxy:
             "call_method", "__call__", (self,) + args, kwargs, data=self.data
         )
 
-    def __iter__(self) -> Iterable["Proxy"]:
+    def __iter__(self, frame_=None) -> Iterable["Proxy"]:
         frame = inspect.currentframe()
         assert frame is not None
-        calling_frame = frame.f_back
+        calling_frame = frame_ if frame_ else frame.f_back 
         assert calling_frame is not None
         inst_list = list(dis.get_instructions(calling_frame.f_code))
         if sys.version_info >= (3, 11):
@@ -522,10 +541,6 @@ class Proxy:
                     return True
         return self.tracer.to_bool(self)
 
-    @compatibility(is_backward_compatible=True)
-    def keys(self):
-        return self.tracer.keys(self)
-
     def __len__(self):
         raise RuntimeError(
             "'len' is not supported in symbolic tracing by default. If you want "
@@ -544,11 +559,11 @@ class Proxy:
 @compatibility(is_backward_compatible=True)
 class NativeProxy(Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Ivy API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of native arrays during symbolic tracing.
+    This proxy holds an instance of the underlying native array (e.g., a PyTorch tensor) as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the native array, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
-
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, native_data=None, frontend=None, to_ivy=False):
         super(NativeProxy, self).__init__(node, tracer, native_data, frontend, to_ivy) 
         self._native_data = native_data
@@ -561,7 +576,7 @@ class NativeProxy(Proxy):
         if k in glob.GRAPH_ATTRIBUTES[ivy.current_backend_str()]:
             def _factory_fn(node,data):
                 if k == "shape":
-                    return NativeShapeProxy(node=node, tracer=self.tracer, shape=data)
+                    return ShapeProxy(node=node, tracer=self.tracer, shape=data)
                 return self.tracer.proxy(node, data)
             return self.tracer.create_proxy(
                 "call_function", getattr, (self, k), {}, data=native_attr, proxy_factory_fn=_factory_fn,
@@ -580,6 +595,9 @@ class NativeAttribute(NativeProxy):
         self.tracer = root.tracer
         self._node: Optional[Node] = None
 
+    def __getattr__(self, k):
+        return getattr(self.attr, k) 
+    
     def __repr__(self):
         return f"NativeAttribute({self.attr.__name__})"
     @property
@@ -596,6 +614,37 @@ class NativeAttribute(NativeProxy):
         nargs = (self.root,) + args 
         return self.attr(*nargs, **kwargs)
         
+        
+@compatibility(is_backward_compatible=True)
+class NativeShapeProxy(Proxy):
+    """
+    A special proxy which lets "shape","dtype","size", and a few other
+    attribute accesses pass through to our underlying  Ivy API,
+    so that conditional tests on these attributes will not throw exception during tracing
+    """
+
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, frontend=None, to_ivy=False):
+        super(NativeShapeProxy, self).__init__(node, tracer, shape, frontend, to_ivy) 
+        self._native_shape = shape 
+
+    def __getattr__(self, item):
+        shape_attr = getattr(self._native_shape, item)
+
+        if callable(shape_attr):
+            return NativeAttribute(self, getattr(type(self._native_shape), item))
+        else:
+            return shape_attr
+    
+    def __iter__(self):
+        return iter(self._native_shape)
+    
+    def __len__(self):
+        return len(self._native_shape)
+    
+    def __repr__(self):
+        return f"NativeShapeProxy({self.node.name})"
+
+
 @compatibility(is_backward_compatible=True)
 class NativeShapeProxy(Proxy):
     """
@@ -627,33 +676,13 @@ class NativeShapeProxy(Proxy):
 
 # Ivy Proxies
 @compatibility(is_backward_compatible=True)
-class IvyShapeProxy(ivy.Shape, Proxy):
-    """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Ivy API,
-    so that conditional tests on these attributes will not throw exception during tracing
-    """
-
-    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, shape_proxy=None, frontend=None, to_ivy=False):
-        super(IvyShapeProxy, self).__init__(shape) 
-        Proxy.__init__(self, node, tracer, shape, frontend, to_ivy)
-        self._ivy_shape = self._shape
-        self._shape = shape_proxy # override the _shape to return a NativeShapeProxy
-
-    def __getattr__(self, item):
-        return getattr(self._shape, item)
-    
-    def __repr__(self):
-        return f"IvyShapeProxy({self.node.name})"
-
-@compatibility(is_backward_compatible=True)
 class IvyProxy(ivy.Array, Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Ivy API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of ivy arrays during symbolic tracing.
+    It also acts as a wrapper around the NativeProxy class storing the instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of ivy.Arrays, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
-
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, native_proxy=None, frontend=None, to_ivy=False):
         super(IvyProxy, self).__init__(data) 
         Proxy.__init__(self, node, tracer, data, frontend,to_ivy)
@@ -664,8 +693,8 @@ class IvyProxy(ivy.Array, Proxy):
         return getattr(self._data, item)
     
     @property
-    def shape(self) -> IvyShapeProxy:
-        native_shape = NativeShapeProxy(node=self.node, tracer=self.tracer,shape=self._ivy_data.shape)
+    def shape(self):
+        native_shape = ShapeProxy(node=self.node, tracer=self.tracer,shape=self._ivy_data.shape)
         return IvyShapeProxy(node=self.node, tracer=self.tracer, shape=self._ivy_data.shape, shape_proxy=native_shape)
     
     @property
@@ -684,9 +713,10 @@ class IvyProxy(ivy.Array, Proxy):
 @compatibility(is_backward_compatible=True)
 class Torch_FrontendProxy(Tensor, Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Frontend API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of a frontend Torch.Tensor during symbolic tracing.
+    It also acts as a wrapper around the IvyProxy class storing the instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of frontend tensor, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, ivy_proxy=None, frontend=None, to_ivy=False, **kwargs):
         super(Torch_FrontendProxy, self).__init__(array=data, **kwargs)
@@ -721,11 +751,11 @@ class Torch_FrontendProxy(Tensor, Proxy):
 @compatibility(is_backward_compatible=True)
 class JAX_FrontendProxy(DeviceArray, Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Frontend API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of a frontend DeviceArray during symbolic tracing.
+    It also acts as a wrapper around the IvyProxy class storing the instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of frontend tensor, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
-
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None,ivy_proxy=None, frontend=None, to_ivy=False, **kwargs):
         super(JAX_FrontendProxy, self).__init__(array=data, **kwargs)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
@@ -740,11 +770,11 @@ class JAX_FrontendProxy(DeviceArray, Proxy):
 @compatibility(is_backward_compatible=True)
 class TF_FrontendProxy(EagerTensor, Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Frontend API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of a frontend EagerTensor during symbolic tracing.
+    It also acts as a wrapper around the IvyProxy class storing the instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of frontend tensor, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
-
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, ivy_proxy=None, frontend=None, to_ivy=False):
         super(TF_FrontendProxy, self).__init__(array=data)
         Proxy.__init__(self, node, tracer, data, frontend, to_ivy)
@@ -764,11 +794,11 @@ class TF_FrontendProxy(EagerTensor, Proxy):
 @compatibility(is_backward_compatible=True)
 class Numpy_FrontendProxy(ndarray, Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Frontend API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of a frontend NDarray during symbolic tracing.
+    It also acts as a wrapper around the IvyProxy class storing the instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of frontend tensor, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
-
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, dtype="float32", ivy_proxy=None,frontend=None, to_ivy=False, **kwargs):
         super(Numpy_FrontendProxy, self).__init__(shape=shape, dtype=dtype, **kwargs)
         Proxy.__init__(self, node, tracer, self.ivy_array, frontend, to_ivy)
@@ -826,16 +856,111 @@ class Attribute(Proxy):
     def __repr__(self):
         return f"Attribute({self.attr})"
 
+# Shape and Dtype Proxies
+@compatibility(is_backward_compatible=True)
+class ShapeProxy(Proxy):
+    """
+    A specialized proxy designed to mimic the behavior of native shapes during symbolic tracing.
+    This proxy holds an instance of the underlying native shape (e.g. torch.Size) as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the native shapes, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
+    """
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, frontend=None, to_ivy=False):
+        super(ShapeProxy, self).__init__(node, tracer, shape, frontend, to_ivy) 
+        self._native_shape = shape 
+
+    def __getattr__(self, item):
+        shape_attr = getattr(self._native_shape, item)
+
+        if callable(shape_attr):
+            return NativeAttribute(self, getattr(type(self._native_shape), item))
+        else:
+            return shape_attr
+    
+    def __iter__(self):
+        return iter(self._native_shape)
+    
+    def __len__(self):
+        return len(self._native_shape)
+    
+    def __repr__(self):
+        return f"ShapeProxy({self.node.name})"
+
+@compatibility(is_backward_compatible=True)
+class IvyShapeProxy(ivy.Shape, Proxy):
+    """
+    A specialized proxy designed to mimic the behavior of ivy.Shape during symbolic tracing.
+    This proxy acts as a wrapper around the NativeShape class and holds its instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the ivy.Shape, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
+    """
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, shape=None, shape_proxy=None, frontend=None, to_ivy=False):
+        super(IvyShapeProxy, self).__init__(shape) 
+        Proxy.__init__(self, node, tracer, shape, frontend, to_ivy)
+        self._ivy_shape = self._shape
+        self._shape = shape_proxy # override the _shape to return a ShapeProxy
+
+    def __getattr__(self, item):
+        return getattr(self._shape, item)
+    
+    def __repr__(self):
+        return f"IvyShapeProxy({self.node.name})"
+
+@compatibility(is_backward_compatible=True)
+class DtypeProxy(Proxy):
+    """
+    A specialized proxy designed to mimic the behavior of native dtypes during symbolic tracing.
+    This proxy holds an instance of the underlying native dtype (e.g., torch.dtype) as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the native array, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
+    """
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, dtype=None, frontend=None, to_ivy=False):
+        super(DtypeProxy, self).__init__(node, tracer, dtype, frontend, to_ivy) 
+        self._native_dtype = dtype 
+
+    def __getattr__(self, item):
+        dtype_attr = getattr(self._native_dtype, item)
+
+        if callable(dtype_attr):
+            return NativeAttribute(self, getattr(type(self._native_dtype), item))
+        else:
+            return dtype_attr
+    
+    def __repr__(self):
+        return f"DtypeProxy({self.node.name})"
+
+@compatibility(is_backward_compatible=True)
+class IvyDtypeProxy(ivy.Dtype, Proxy):
+    """
+    A specialized proxy designed to mimic the behavior of ivy.Dtype during symbolic tracing.
+    This proxy acts as a wrapper around the NativeDtype class and holds its instance as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the ivy.Dtype, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
+    """
+    def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, dtype=None, dtype_proxy=None, frontend=None, to_ivy=False):
+        super(IvyDtypeProxy, self).__init__(dtype) 
+        Proxy.__init__(self, node, tracer, dtype, frontend, to_ivy)
+        self._ivy_dtype = self._dtype
+        self._dype = dtype_proxy
+
+    def __getattr__(self, item):
+        return getattr(self._dtype, item)
+    
+    def __repr__(self):
+        return f"IvyDtypeProxy({self.node.name})"
+
+
 @compatibility(is_backward_compatible=True)
 class ScalarProxy(Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Ivy API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of scalars during symbolic tracing.
+    This proxy holds an instance of the underlying scalar (e.g., int, float, bool, str) as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the scalar, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
 
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
-        super(ScalarProxy, self).__init__(node, tracer, data, frontend, to_ivy) 
+        super(ScalarProxy, self).__init__(node, tracer, data) 
         self._scalar = data
 
     def __repr__(self):
@@ -849,32 +974,535 @@ class ScalarProxy(Proxy):
             return native_attr
 
 @compatibility(is_backward_compatible=True)
-class BuiltinProxy(Proxy):
+class IteratorProxy(Proxy):
     """
-    A special proxy which lets "shape","dtype","size", and a few other
-    attribute accesses pass through to our underlying  Ivy API,
-    so that conditional tests on these attributes will not throw exception during tracing
+    A specialized proxy designed to mimic the behavior of iterables during symbolic tracing.
+    This proxy holds an instance of the underlying iterable (e.g., zip, enumerate, range) as an attribute.
+    However, it's important to note that while the proxy can mimic the behavior of the collection, it does not hold any actual values. 
+    Any computations performed during symbolic tracing will not yield meaningful results as they are operating on dummy data.
     """
 
     def __init__(self, node: Node, tracer: "Optional[TracerBase]" = None, data=None, frontend=None, to_ivy=False):
-        super(BuiltinProxy, self).__init__(node, tracer, data)  
+        super(IteratorProxy, self).__init__(node, tracer, data)  
         self._collection = data
-        self._array = ivy.array([])
+
+    def __iter__(self):
+        frame = inspect.currentframe()
+        assert frame is not None
+        calling_frame = frame.f_back 
+        assert calling_frame is not None
+        inst_list = list(dis.get_instructions(calling_frame.f_code))
+        if sys.version_info >= (3, 11):
+            from bisect import bisect_left
+
+            inst_idx = bisect_left(
+                inst_list, calling_frame.f_lasti, key=lambda x: x.offset
+            )
+        else:
+            inst_idx = calling_frame.f_lasti // 2
+        inst = inst_list[inst_idx]
+        if inst.opname == "UNPACK_SEQUENCE":
+            idx = 0
+
+            res = []
+            for idx,item in enumerate(self._collection):
+                proxy = self.tracer.create_proxy("call_function", operator.getitem, (self,idx),{},data=item, proxy_type=ProxyType.EAGER_PROXY) 
+                res.append(proxy)
+            return iter(res)
+
+        return (self[i] for i in range(inst.argval))  # type: ignore[index]
+     
+    def __getattr__(self, k):
+        return getattr(self._collection, k)
+        
+    def __repr__(self):
+        return f"IteratorProxy({self.node.name})"
+
+
+class TupleProxy(IteratorProxy):
+    def __init__(self, node, tracer, data=None):
+        assert not isinstance(data, type(None))
+        if isinstance(data, Proxy):
+            if not isinstance(data, ITERABLE_PROXIES):
+                raise ProxyDataError("Cannot convert a Proxy object to a tuple when using the `symbolic` mode.")
+        super().__init__(node, tracer, data=data)
+        self._collection = tuple(_get_concrete_val(data))
+        assert isinstance(self._collection, tuple)
+        
+    def __getitem__(self, index):
+        idx = map_aggregate(index, lambda a: _get_concrete_val(a))
+        if _find_proxy(idx) is not None:
+            raise ProxyDataError("cannot index a tuple with unknown index")
+        
+        value = self._collection[idx]
+        return self.tracer.create_proxy("call_function", tuple.__getitem__, (self,index),{},data=value, proxy_type=ProxyType.EAGER_PROXY) 
+    
+    def __len__(self):
+        return self.tracer.create_proxy("call_function", tuple.__len__, (self,),{},data=len(self._collection), proxy_type=ProxyType.SCALAR_PROXY)
 
     def __repr__(self):
-        return f"BuiltinProxy({self.node.name})"
+        return f"TupleProxy({self.node.name})"
     
-    def __getattr__(self, k) -> "NativeAttribute":
-        try: 
-            native_attr = getattr(self._collection, k)
-            if callable(native_attr):
-                return NativeAttribute(self, getattr(type(self._collection), k))
-        except AttributeError:
-            native_attr = getattr(self._array, k)
-            if callable(native_attr):
-                return NativeAttribute(self, getattr(type(self._array), k))
+    def __contains__(self, value):
+        return self.tracer.create_proxy("call_function", tuple.__contains__, (self,value),{},data=value in self._collection, proxy_type=ProxyType.EAGER_PROXY)
+
+    def len(self):
+        return self.__len__()
         
-        return native_attr
+    def index(self, value, start=0, end=None):
+        v,s,e = map_aggregate((value,start,end), lambda a: _get_concrete_val(a))
+        if _find_proxy((v,s,e)) is not None:
+            raise ProxyDataError("cannot index a tuple with unknown index")
+        ret = self._collection.index(v,s,e)
+        proxy = self.tracer.create_proxy("call_function", tuple.index, (self,value, start, end),{},data=ret, proxy_type=ProxyType.EAGER_PROXY)
+        return proxy
+    
+    def count(self, value):
+        val = map_aggregate(value, lambda a: _get_concrete_val(a))
+        if _find_proxy(val) is not None:
+            raise ProxyDataError("cannot index a tuple with unknown index")
+        res = self._collection.count(val)
+        return self.tracer.create_proxy("call_function", tuple.count, (self,value),{},data=res, proxy_type=ProxyType.EAGER_PROXY)
+
+
+class SetProxy(IteratorProxy):
+    def __init__(self, node, tracer, data=None):
+        assert not isinstance(data, type(None))
+        if isinstance(data, Proxy):
+            if not isinstance(data, ITERABLE_PROXIES):
+                raise ProxyDataError("Cannot convert a Proxy object to a set when using the `symbolic` mode.")
+        super().__init__(node, tracer, data=data)
+        self._collection = set(_get_concrete_val(data))
+        assert isinstance(self._collection, set)
+        
+    def __len__(self):
+        return self.tracer.create_proxy("call_function", set.__len__, (self,),{},data=len(self._collection), proxy_type=ProxyType.EAGER_PROXY)
+
+    def __contains__(self, value):
+        return self.tracer.create_proxy("call_function", set.__contains__, (self,value),{},data=value in self._collection, proxy_type=ProxyType.EAGER_PROXY)
+
+    def __repr__(self):
+        return f"SetProxy({self.node.name})"
+    
+    def len(self):
+        return self.__len__()
+        
+    def add(self, value):
+        self._collection.add(value)
+        _ = self.tracer.create_proxy("call_function", set.add, (self,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def remove(self, value):
+        v = map_aggregate(value, lambda a: _get_concrete_val(a))
+        if _find_proxy(v) is not None:
+            raise ProxyDataError("cannot index a set with unknown index")
+    
+        self._collection.remove(v)
+        _ = self.tracer.create_proxy("call_function", set.remove, (self,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def discard(self,value):
+        v = map_aggregate(value, lambda a: _get_concrete_val(a))
+        if _find_proxy(v) is not None:
+            raise ProxyDataError("cannot index a set with unknown index")
+        
+        self._collection.discard(value)
+        _ = self.tracer.create_proxy("call_function", set.discard,(self,value),{},data=None ,proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def pop(self):
+        val = self._collection.pop()
+        return self.tracer.create_proxy("call_function", set.pop,(self,),{},data=val ,proxy_type=ProxyType.EAGER_PROXY)
+       
+    def clear(self):
+        self._collection.clear()
+        _ = self.tracer.create_proxy("call_function", set.clear,(self,),{},data=None ,proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def union(self, *others):
+        others_ = map_aggregate(others, lambda a: _get_concrete_val(a))
+        if _find_proxy(others_) is not None:
+            raise ProxyDataError("Cannot convert a Proxy object to a set when using the `symbolic` mode.")   
+
+        result = self._collection.union(*others_)
+        return self.tracer.create_proxy("call_function", set.union, (self,) + others,{},data=result, proxy_type=ProxyType.SET_PROXY)
+
+    def intersection(self, *others):
+        others_ = map_aggregate(others, lambda a: _get_concrete_val(a))
+        if _find_proxy(others_) is not None:
+            raise ProxyDataError("Cannot convert a Proxy object to a set when using the `symbolic` mode.")   
+        
+        result = self._collection.intersection(*others_)
+        return self.tracer.create_proxy("call_function", set.intersection, (self,) + others,{},data=result, proxy_type=ProxyType.SET_PROXY)
+        
+    
+
+class DictProxy(IteratorProxy):
+    def __init__(self, node, tracer, data=None):
+        assert not isinstance(data, type(None))
+        if isinstance(data, Proxy):
+            if not isinstance(data, ITERABLE_PROXIES):
+                raise ProxyDataError("Cannot convert a Proxy object to a dict when using the `symbolic` mode.")
+        super().__init__(node, tracer, data=data)
+        self._collection = dict(_get_concrete_val(data))
+        assert isinstance(self._collection, dict)
+
+    def __getitem__(self, key):
+        k = map_aggregate(key, lambda a: _get_concrete_val(a))
+        if _find_proxy(k) is not None:
+            raise ProxyDataError("cannot index a dict with unknown key")
+        
+        val = self._collection[k]
+        return self.tracer.create_proxy("call_function", dict.__getitem__, (self,key),{},data=val, proxy_type=ProxyType.EAGER_PROXY) 
+        
+    def __setitem__(self, key, value):
+        k = map_aggregate(key, lambda a: _get_concrete_val(a))
+        if _find_proxy(k) is not None:
+            raise ProxyDataError("cannot index a dict with unknown key")
+        
+        self._collection[k] = value
+        _ =  self.tracer.create_proxy("call_function", dict.__setitem__, (self,key,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def __delitem__(self, key):
+        k = map_aggregate(key, lambda a: _get_concrete_val(a))
+        if _find_proxy(k) is not None:
+            raise ProxyDataError("cannot index a dict with unknown key")
+        
+        del self._collection[key]
+        _ =  self.tracer.create_proxy("call_function", dict.__delitem__, (self,key),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+        
+    def __contains__(self, key):
+        val =  key in self._collection
+        return self.tracer.create_proxy("call_function", dict.__contains__, (self,key),{},data=val, proxy_type=ProxyType.EAGER_PROXY)
+        
+    def __len__(self):
+        return self.tracer.create_proxy("call_function", dict.__len__, (self,),{},data=len(self._collection), proxy_type=ProxyType.EAGER_PROXY)
+    
+    def __repr__(self):
+        return f"DictProxy({self.node.name})"
+    
+    def len(self):
+        return self.__len__()
+        
+    def keys(self):
+        val = list(self._collection.keys())
+        return self.tracer.create_proxy("call_function", dict.keys, (self,),{},data=val, proxy_type=ProxyType.EAGER_PROXY)
+    
+    def values(self):
+        val = list(self._collection.items())
+        return self.tracer.create_proxy("call_function", dict.values, (self,),{},data=val, proxy_type=ProxyType.EAGER_PROXY)
+        
+    def items(self):
+        val = list(self._collection.items())
+        return self.tracer.create_proxy("call_function", dict.items, (self,),{},data=val, proxy_type=ProxyType.EAGER_PROXY)
+        
+    def get(self, key, default=None):
+        k= map_aggregate(key, lambda a: _get_concrete_val(a))
+        if _find_proxy(k) is not None:
+            raise ProxyDataError("cannot index a dict with unknown key")
+        val = self._collection.get(k, default)
+        return self.tracer.create_proxy("call_function", dict.get, (self,key,default),{},data=val, proxy_type=ProxyType.EAGER_PROXY)
+        
+    def pop(self, key, default=None):
+        k = map_aggregate(key, lambda a: _get_concrete_val(a))
+        if _find_proxy(k) is not None:
+            raise ProxyDataError("cannot index a dict with unknown key")
+        value = self._collection.pop(k, default)
+        return self.tracer.create_proxy("call_function", dict.pop, (self,key,default),{},data=value, proxy_type=ProxyType.EAGER_PROXY)
+
+    def popitem(self):
+        key_value = self._collection.popitem()
+        return self.tracer.create_proxy("call_function", dict.popitem, (self,),{},data=key_value, proxy_type=ProxyType.EAGER_PROXY)
+
+    def update(self, other={}, **kwargs):
+        if isinstance(other, Proxy):
+            if isinstance(other, ITERABLE_PROXIES):
+                self._collection.update(other._collection, **kwargs)
+            else:
+                raise ProxyDataError("Cannot convert a Proxy object to a dict when using the `symbolic` mode.")   
+        else:
+            self._collection.update(other, **kwargs)
+        _ = self.tracer.create_proxy("call_function", dict.update, (self,),{"other": other},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def clear(self):
+        self._collection.clear()
+        _ = self.tracer.create_proxy("call_function", dict.clear, (self,),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+class ListProxy(IteratorProxy):
+    def __init__(self, node, tracer, data=None):
+        if isinstance(data, Proxy):
+            if not isinstance(data, ITERABLE_PROXIES):
+                raise ProxyDataError("Cannot convert a Proxy object to a list when using the `symbolic` mode.")
+        super().__init__(node, tracer, data=data)
+        self._collection= list(_get_concrete_val(data))
+        assert isinstance(self._collection, list)
+
+    def __getitem__(self, index):
+        idx = map_aggregate(index, lambda a: _get_concrete_val(a))
+        if _find_proxy(idx) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        value = self._collection[idx]
+        return self.tracer.create_proxy("call_function", list.__getitem__, (self,index),{},data=value, proxy_type=ProxyType.EAGER_PROXY) 
+    
+    def __setitem__(self, index, value):
+        idx = map_aggregate(index, lambda a: _get_concrete_val(a))
+        if _find_proxy(idx) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        self._collection[idx] = value
+        _ =  self.tracer.create_proxy("call_function", list.__setitem__, (self,index,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+        
+    def __delitem__(self, index):
+        idx = map_aggregate(index, lambda a: _get_concrete_val(a))
+        if _find_proxy(idx) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        del self._collection[idx]
+        _ =  self.tracer.create_proxy("call_function", list.__delitem__, (self,index),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def __len__(self):
+        return self.tracer.create_proxy("call_function", list.__len__, (self,),{},data=len(self._collection), proxy_type=ProxyType.EAGER_PROXY)
+     
+    def __repr__(self):
+        return f"ListProxy({self.node.name})"
+    
+    def len(self):
+        return self.__len__()
+        
+    def append(self, value):
+        self._collection.append(value)
+        _ = self.tracer.create_proxy("call_function", list.append, (self,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+    
+    def extend(self, iterable):
+        if isinstance(iterable, Proxy):
+            if isinstance(iterable, ITERABLE_PROXIES):
+                self._collection.extend(iterable._collection)
+            else:
+                raise ProxyDataError("Cannot convert a Proxy object to a list.extend when using the `symbolic` mode.")
+        else:
+            self._collection.extend(iterable)
+        _ = self.tracer.create_proxy("call_function", list.extend, (self,iterable),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def insert(self, index, value):
+        idx = map_aggregate(index, lambda a: _get_concrete_val(a))
+        if _find_proxy(idx) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        self._collection.insert(idx,value)
+        _ = self.tracer.create_proxy("call_function", list.insert, (self,index,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+       
+    def remove(self, value):
+        val = map_aggregate(value, lambda a: _get_concrete_val(a))
+        if _find_proxy(val) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        self._collection.remove(val)
+        _ = self.tracer.create_proxy("call_function", list.remove, (self,value),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+    
+    def pop(self, index=-1):
+        idx = map_aggregate(index, lambda a: _get_concrete_val(a))
+        if _find_proxy(idx) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        value = self._collection.pop(idx)
+        return self.tracer.create_proxy("call_function", list.pop, (self,index),{},data=value, proxy_type=ProxyType.EAGER_PROXY)
+        
+    def clear(self):
+        self._collection.clear()
+        _ = self.tracer.create_proxy("call_function", list.clear, (self,),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def index(self, value, start=0, end=None):
+        val,s,e = map_aggregate((val,s,e), lambda a: _get_concrete_val(a))
+        if _find_proxy((val,s,e)) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        value = self._collection.index(val,s,e)
+        return self.tracer.create_proxy("call_function", list.index, (self,value, start, end),{},data=value, proxy_type=ProxyType.EAGER_PROXY)
+        
+    def count(self, value):
+        val,s,e = map_aggregate((val,s,e), lambda a: _get_concrete_val(a))
+        if _find_proxy((val,s,e)) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        
+        return self.tracer.create_proxy("call_function", list.count, (self,value),{},data=self._collection.count(value), proxy_type=ProxyType.EAGER_PROXY)
+
+    def sort(self, key=None, reverse=False):
+        k,rev = map_aggregate((key,reverse), lambda a: _get_concrete_val(a))
+        if _find_proxy((k,rev)) is not None:
+            raise ProxyDataError("cannot index a list with unknown index")
+        self._collection.sort(key=k, reverse=rev)
+        _ = self.tracer.create_proxy("call_function", list.sort, (self,),{"key": key, "reverse": reverse},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+    def reverse(self):
+        self._collection.reverse()
+        _ = self.tracer.create_proxy("call_function", list.reverse, (self,),{},data=None, proxy_type=ProxyType.UNDEFINED_PROXY)
+
+class EnumerateProxy(IteratorProxy):
+    def __init__(self, node, tracer, iterable_proxy, start=0):
+        assert isinstance(iterable_proxy, ITERABLE_PROXIES)
+        super().__init__(node, tracer, data=(iterable_proxy,start))
+        iterable,s = _get_concrete_val(iterable_proxy,start)
+        if _find_proxy((iterable,s)) is not None:
+            raise ProxyDataError("cannot create an enumerate object with unknown iterable/start value.")
+        self._collection = enumerate(iterable,s)
+
+    def __repr__(self):
+        return f"EnumerateProxy({self.node.name})"
+
+class ZipProxy(IteratorProxy):
+    def __init__(self, node, tracer, *iterable_proxies):
+        for iterable_proxy in iterable_proxies:
+            if isinstance(iterable_proxy, Proxy):
+                assert isinstance(iterable_proxy, ITERABLE_PROXIES)
+        super().__init__(node, tracer,data=iterable_proxies)
+        iterables = map_aggregate(iterable_proxies, lambda a:_get_concrete_val(a))
+        self._collection = zip(*iterables)
+    
+    def __repr__(self):
+        return f"ZipProxy({self.node.name})"
+
+class RangeProxy(Proxy):
+    def __init__(self, node, tracer, start, stop=None, step=None):
+        for arg in (start,stop,step):
+            if isinstance(arg, Proxy):
+                assert isinstance(arg, ScalarProxy), f"invalid input of type({type(arg)}) when calling range"
+        super().__init__(node, tracer,data=(start,stop,step))
+
+    def __getitem__(self, index):
+        return self.tracer.create_proxy("call_function", range.__getitem__, (self,index),{},data=0, proxy_type=ProxyType.SCALAR_PROXY) 
+    
+    def __iter__(self):
+        frame = inspect.currentframe()
+        assert frame is not None
+        calling_frame = frame.f_back 
+        assert calling_frame is not None
+        inst_list = list(dis.get_instructions(calling_frame.f_code))
+        if sys.version_info >= (3, 11):
+            from bisect import bisect_left
+
+            inst_idx = bisect_left(
+                inst_list, calling_frame.f_lasti, key=lambda x: x.offset
+            )
+        else:
+            inst_idx = calling_frame.f_lasti // 2
+        inst = inst_list[inst_idx]    
+        return (self[i] for i in range(inst.argval))  # type: ignore[index]
+    
+    def __repr__(self):
+        return f"RangeProxy({self.node.name})"
+
+@compatibility(is_backward_compatible=False)
+class EagerProxy(Proxy):
+    def __init__(self, node: Node, tracer: TracerBase, concr_val: Any):
+        assert not isinstance(concr_val, Proxy), f"EagerProxies cannot be initialized with Proxies. Got an input of type {type(concr_val)}"
+        super().__init__(node, tracer, concr_val)
+        self._concrete_val = concr_val 
+
+    def __getattr__(self, k) -> "EagerAttribute":
+        try:
+            attr = getattr(self._concrete_val,k)
+            return EagerAttribute(self, getattr(type(self._concrete_val),k))
+        except AttributeError:
+            raise AttributeError(f"{type(self._concrete_val)} has no attribute '{k}'")
+
+    def __call__(self, *args, **kwargs) -> "Proxy":
+        return self.tracer.create_proxy(
+            "call_method", "__call__", (self,) + args, kwargs, data=self.data
+        )
+
+    def __bool__(self):
+        return bool(self._concrete_val)
+
+    def __iter__(self) -> Iterable["EagerProxy"]:
+        frame = inspect.currentframe()
+        assert frame is not None
+        calling_frame = frame.f_back 
+        assert calling_frame is not None
+        inst_list = list(dis.get_instructions(calling_frame.f_code))
+        if sys.version_info >= (3, 11):
+            from bisect import bisect_left
+
+            inst_idx = bisect_left(
+                inst_list, calling_frame.f_lasti, key=lambda x: x.offset
+            )
+        else:
+            inst_idx = calling_frame.f_lasti // 2
+        inst = inst_list[inst_idx]
+        if inst.opname == "UNPACK_SEQUENCE":
+            res = []
+            for idx,item in enumerate(self._concrete_val):
+                proxy = self.tracer.create_proxy("call_function", operator.getitem, (self,idx),{},data=item, proxy_type=ProxyType.EAGER_PROXY) 
+                res.append(proxy)
+            return iter(res)
+        elif inst.opname == "DICT_UPDATE":
+            return iter(self._concrete_val)
+        elif inst.opname == "EXTENDED_ARG":
+            while inst_list[inst_idx].opname == "EXTENDED_ARG":
+                inst_idx += 1
+            inst = inst_list[inst_idx]
+        
+        if inst.opname == 'UNPACK_EX':
+            before_starred = inst.argval & 0xFF  # Lower 8 bits
+            after_starred = inst.argval >> 8  # Upper 8 bits
+
+            res_before = []
+            for idx in range(before_starred):
+                proxy = self.tracer.create_proxy("call_function", operator.getitem, (self,idx),{},data=self._concrete_val[idx], proxy_type=ProxyType.EAGER_PROXY) 
+                res_before.append(proxy)
+
+            res_after = []
+            for idx in range(len(self._concrete_val) - after_starred, len(self._concrete_val)):
+                proxy = self.tracer.create_proxy("call_function", operator.getitem, (self,idx),{},data=self._concrete_val[idx], proxy_type=ProxyType.EAGER_PROXY) 
+                res_after.append(proxy)
+
+            res_starred = self._concrete_val[before_starred:len(self._concrete_val)-after_starred]
+            res_starred = [self.tracer.create_proxy("call_function", operator.getitem, (self,slice(before_starred,self.__len__()-after_starred)),{},data=res_starred, proxy_type=ProxyType.EAGER_PROXY)]
+            
+            res_before.append(res_starred)
+            return iter(res_before + res_after)
+    
+        return self.tracer.create_proxy("call_function", self._concrete_val.__iter__, (self,),{},data=iter(self._concrete_val), proxy_type=ProxyType.EAGER_PROXY) 
+    
+    def __len__(self) -> 'EagerProxy':
+        return self.tracer.create_proxy("call_function", self._concrete_val.__len__, (self,),{},data=len(self._concrete_val), proxy_type=ProxyType.EAGER_PROXY) 
+
+    def len(self) -> 'EagerProxy':
+        return self.__len__()
+    
+    def __repr__(self) -> str:
+        return f"EagerProxy({self.node.name})"
+
+class EagerAttribute(EagerProxy):
+    @compatibility(is_backward_compatible=True)
+    def __init__(self, root: EagerProxy, attr: Callable):
+        assert isinstance(root, EagerProxy)
+        assert callable(attr)
+        self.root = root
+        self.attr = attr
+        self.tracer = root.tracer
+        self._node: Optional[Node] = None
+
+    def __getattr__(self, k):
+        return getattr(self.attr, k) 
+    
+    def __repr__(self):
+        return f"EagerAttribute({self.attr.__name__})"
+    @property
+    def node(self):
+        # the node for attributes is added lazily, since most will just be method calls
+        # which do not rely on the getitem call
+        if self._node is None:
+            self._node = self.tracer.create_proxy(
+                "call_function", getattr, (self.root, self.attr), {}, data=None
+            ).node
+        return self._node
+
+    def __call__(self, *args, **kwargs):
+        nargs = (self.root,) + args
+        if hasattr(self.attr, '__objclass__') and self.attr.__objclass__ in [list,tuple,set,dict]:
+            concr_args = map_aggregate(nargs, lambda a: _get_concrete_val(a))
+            concr_kwargs = map_aggregate(kwargs, lambda a: _get_concrete_val(a))
+            val = self.attr(*concr_args, **concr_kwargs)
+            return self.tracer.create_proxy(
+                "call_function", self.attr, nargs, kwargs, data=val, proxy_type=ProxyType.EAGER_PROXY,
+            )
+        return self.attr(*nargs, **kwargs)
 
 @compatibility(is_backward_compatible=False)
 class ParameterProxy(Proxy):
@@ -911,6 +1539,81 @@ class ParameterProxy(Proxy):
 
     def nelement(self):
         return self.param.nelement()
+
+# define dunder methods for the EagerProxy/Iterable Proxy classes 
+ITERABLE_PROXIES = (ListProxy, DictProxy, TupleProxy, SetProxy, EnumerateProxy, ZipProxy, EagerProxy)
+
+for cls in ITERABLE_PROXIES:   
+    for method in magic_methods:
+
+        def _scope(method):
+            def impl(*args, **kwargs):
+                nargs = map_aggregate(args, lambda a: _get_concrete_val(a))
+                nkwargs = map_aggregate(kwargs, lambda a: _get_concrete_val(a))
+                tracer = args[0].tracer
+                data = _get_concrete_val(args[0])
+                method_ = f"__{method.strip('_')}__"
+                try:
+                    target = getattr(type(data), method_)
+                except AttributeError:
+                    target = getattr(operator, method_)
+                concrete_result = target(*nargs, **nkwargs)
+                return tracer.create_proxy(
+                    "call_function", target, args, kwargs, data=concrete_result, proxy_type=ProxyType.EAGER_PROXY
+                )
+
+            impl.__name__ = method
+            as_magic = f'__{method.strip("_")}__'
+            setattr(cls, as_magic, impl) 
+
+        _scope(method)
+
+
+    def _define_reflectable(orig_method_name):
+        def impl(self, rhs):
+            rhs_val = map_aggregate(rhs,lambda a: _get_concrete_val(a))
+            data = _get_concrete_val(self)
+            method_ = f'__{orig_method_name.strip("_")}__'
+            try:
+                target = getattr(type(data), method_)
+            except AttributeError:
+                    target = getattr(operator, method_)
+            concrete_result = target(rhs_val, data)
+            return self.tracer.create_proxy(
+                "call_function", target, (rhs, self), {}, data=concrete_result, proxy_type=ProxyType.EAGER_PROXY
+            )
+
+        method_name = f'__r{orig_method_name.strip("_")}__'
+        impl.__name__ = method_name
+        impl.__qualname__ = method_name
+        setattr(cls, method_name, impl)
+
+
+    for orig_method_name in reflectable_magic_methods:
+        _define_reflectable(orig_method_name)
+
+    for method in inplace_methods:
+        def _scope(method):
+            def impl(*args, **kwargs):
+                nargs = map_aggregate(args, lambda a: _get_concrete_val(a))
+                nkwargs = map_aggregate(kwargs, lambda a: _get_concrete_val(a))
+                tracer = args[0].tracer
+                data = _get_concrete_val(args[0]) 
+                method_ = f"__{method.strip('_')}__"
+                try:
+                    target = getattr(type(data), method_)
+                except AttributeError:
+                    target = getattr(operator, method_)
+                concrete_result = target(*nargs, **nkwargs)
+                return tracer.create_proxy(
+                    "call_function", target, args, kwargs, data=concrete_result, proxy_type=ProxyType.EAGER_PROXY
+                )
+
+            impl.__name__ = method
+            as_magic = f'__{method.strip("_")}__'
+            setattr(cls, as_magic, impl)
+
+        _scope(method)
 
 # define dunder methods for the Proxy class     
 for method in magic_methods:
@@ -1011,16 +1714,58 @@ for method in inplace_methods:
     method = f'__{method.strip("_")}__'
     _scope(method)
 
+def _get_concrete_val(obj):
+    if isinstance(obj, EagerProxy):
+        return obj._concrete_val
+    elif isinstance(obj, (ListProxy,SetProxy,TupleProxy,DictProxy)):
+        return obj._collection  
+    else:
+        return obj
+
+def _find_proxy(*objects_to_search):
+    """
+    Recursively search a data structure for a Proxy() and return it,
+    return None if not found.
+    """
+    proxy = None
+
+    def find_proxy(x):
+        nonlocal proxy
+        if isinstance(x, Proxy) and proxy is None:
+            proxy = x
+
+    map_aggregate(objects_to_search, find_proxy)
+    return proxy
+
+def _is_native_shape(val):
+    return val.__class__.__name__ in ("Size", "TensorShape")
+
 def _get_proxy_type(data):
+    if isinstance(data, Proxy):
+        assert data.__class__.__name__ in class_to_enum
+        return class_to_enum[data.__class__.__name__]
     if ivy.is_array(data) or data is None:
         return ProxyType.NATIVE_PROXY
     elif ivy.is_native_dtype(data):
         return ProxyType.DTYPE_PROXY
+    elif _is_native_shape(data):
+        return ProxyType.SHAPE_PROXY             
     elif ivy.isscalar(data):
         return ProxyType.SCALAR_PROXY
-    elif isinstance(data, (list, tuple, dict, set, range, enumerate, zip)):
-        return ProxyType.BUILTIN_PROXY
-    #TODO: add check for handling shapes
+    elif isinstance(data, list):
+        return ProxyType.LIST_PROXY
+    elif isinstance(data, dict):
+        return ProxyType.DICT_PROXY
+    elif isinstance(data, tuple):
+        return ProxyType.TUPLE_PROXY
+    elif isinstance(data, set):
+        return ProxyType.SET_PROXY
+    elif isinstance(data, enumerate):
+        return ProxyType.ENUMERATE_PROXY
+    elif isinstance(data, range):
+        return ProxyType.RANGE_PROXY
+    elif isinstance(data, zip):
+        return ProxyType.ZIP_PROXY
     else:
         return ProxyType.UNDEFINED_PROXY
     
@@ -1029,4 +1774,23 @@ FRONTEND_PROXIES = {
     "jax": JAX_FrontendProxy,
     "tensorflow": TF_FrontendProxy,
     "numpy": Numpy_FrontendProxy,
+}
+
+class_to_enum = {
+    'IvyProxy': ProxyType.IVY_PROXY,
+    'FrontendProxy': ProxyType.FRONTEND_PROXY,
+    'NativeProxy': ProxyType.NATIVE_PROXY,
+    'ShapeProxy': ProxyType.SHAPE_PROXY,
+    'DtypeProxy': ProxyType.DTYPE_PROXY,
+    'ScalarProxy': ProxyType.SCALAR_PROXY,
+    'ListProxy': ProxyType.LIST_PROXY,
+    'DictProxy': ProxyType.DICT_PROXY,
+    'TupleProxy': ProxyType.TUPLE_PROXY,
+    'SetProxy': ProxyType.SET_PROXY,
+    'EnumerateProxy': ProxyType.ENUMERATE_PROXY,
+    'ZipProxy': ProxyType.ZIP_PROXY,
+    'RangeProxy': ProxyType.RANGE_PROXY,
+    'NdarrayProxy': ProxyType.NDARRAY_PROXY,
+    'UndefinedProxy': ProxyType.UNDEFINED_PROXY,
+    'EagerProxy': ProxyType.EAGER_PROXY
 }
