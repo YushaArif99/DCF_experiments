@@ -157,13 +157,16 @@ def convert_call(func):
              [1. 1. 1.]]
 
     """
+    if hasattr(func, 'wrapped_for_tracing'):
+        return func
+    
     translator_logger.log(1, f"Convert callable object: convert {func}.")
     func_self = None
     converted_call = None 
 
     # Function in convert_call may be decorated by other decorators,
     # in this case, unwraps it into a raw method or function.
-    _, func = unwrap(func)
+    func = unwrap(func)
 
     options = getattr(func, CONVERSION_OPTIONS, None)
     if options is not None and options.not_convert:

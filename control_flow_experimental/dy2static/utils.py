@@ -31,7 +31,7 @@ from .utils_helper import is_internal_api  # noqa: F401
 from .utils_helper import is_numpy_api  # noqa: F401;
 from .utils_helper import is_ivy_api  # noqa: F401
 from .utils_helper import is_native_backend_api  # noqa: F401
-
+from .utils_helper import is_builtin_api # noqa: F401
 import ivy 
 
 __all__ = []
@@ -43,15 +43,15 @@ ARGS_NAME = '__args'
 # NOTE: Please use `getattr(ast_node, ORIGI_INFO)` instead of . operation to get the original information of ast node.
 ORIGI_INFO = "Original information of source code for ast node."
 
-DEL_TEMP_DIR = True  # A flag to avoid atexit.register more than once
-FOR_ITER_INDEX_PREFIX = '__for_loop_var_index'
-FOR_ITER_TUPLE_PREFIX = '__for_loop_iter_tuple'
-FOR_ITER_TARGET_PREFIX = '__for_loop_iter_target'
-FOR_ITER_ITERATOR_PREFIX = '__for_loop_iter_iterator'
-FOR_ITER_TUPLE_INDEX_PREFIX = '__for_loop_iter_tuple_index'
-FOR_ITER_VAR_LEN_PREFIX = '__for_loop_var_len'
-FOR_ITER_VAR_NAME_PREFIX = '__for_loop_iter_var'
-FOR_ITER_ZIP_TO_LIST_PREFIX = '__for_loop_iter_zip'
+DEL_TEMP_DIR = False  # A flag to avoid atexit.register more than once
+FOR_ITER_INDEX_PREFIX = '__fl_var'
+FOR_ITER_TUPLE_PREFIX = '__fl_iter_tuple'
+FOR_ITER_TARGET_PREFIX = '__fl_iter_target'
+FOR_ITER_ITERATOR_PREFIX = '__fl_iter' 
+FOR_ITER_TUPLE_INDEX_PREFIX = '__fl_iter_tuple_index'
+FOR_ITER_VAR_LEN_PREFIX = '__fl_len' 
+FOR_ITER_VAR_NAME_PREFIX = '__fl_iter_var'
+FOR_ITER_ZIP_TO_LIST_PREFIX = '__fl_iter_zip'
 
 RE_PYNAME = '[a-zA-Z0-9_]+'
 RE_PYMODULE = r'[a-zA-Z0-9_]+\.'
@@ -66,8 +66,8 @@ FALSE_FUNC_PREFIX = 'false_fn'
 
 WHILE_CONDITION_PREFIX = 'while_condition'
 WHILE_BODY_PREFIX = 'while_body'
-FOR_CONDITION_PREFIX = 'for_loop_condition'
-FOR_BODY_PREFIX = 'for_loop_body'
+FOR_CONDITION_PREFIX = 'for_condition'
+FOR_BODY_PREFIX = 'for_body'
 
 GRAD_PREFIX = 'grad/'
 GRAD_SUFFIX = '@GRAD'
@@ -342,6 +342,8 @@ def ast_to_func(ast_root, dyfunc, delete_on_exit=True):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
+    # Add the module to sys.modules
+    sys.modules[module.__name__] = module
     # The 'forward' or 'another_forward' of 'TranslatedLayer' cannot be obtained
     # through 'func_name'. So set the special function name '__i_m_p_l__'.
     if hasattr(module, '__i_m_p_l__'):
@@ -365,6 +367,8 @@ def ast_to_func(ast_root, dyfunc, delete_on_exit=True):
 def _inject_import_statements():
     backend_import = ivy.current_backend_str()
     import_statements = [
+        "import torch",
+        "import torch.nn as nn",
         "import ivy",
         "import control_flow_experimental.dy2static as dy2s",
         "import control_flow_experimental.ivy_fx.fx as fx",
@@ -393,14 +397,14 @@ def func_to_source_code(function, dedent=True):
     """
     Transforms function into raw string of source code.
     """
-    if isinstance(function, functools.partial):
-        function = function.func
-    if not (inspect.isfunction(function) or inspect.ismethod(function)):
-        raise TypeError(
-            "The type of 'function' should be a function or method, but received {}.".format(
-                type(function).__name__
-            )
-        )
+    # if isinstance(function, functools.partial):
+    #     function = function.func
+    # if not (inspect.isfunction(function) or inspect.ismethod(function)):
+    #     raise TypeError(
+    #         "The type of 'function' should be a function or method, but received {}.".format(
+    #             type(function).__name__
+    #         )
+    #     )
 
     source_code_list, _ = inspect.getsourcelines(function)
     # Replace comments with blank lines so that error messages are not misplaced
@@ -852,7 +856,7 @@ class FunctionNameLivenessAnalysis(gast.NodeVisitor):
         write_context = (gast.Store, gast.AugStore, gast.Del)
         if isinstance(node.ctx, write_context):
             self._current_name_scope().w_vars.add(node.id)
-        elif isinstance(node.ctx, gast.Load) and node.id not in ['enumerate', 'range', 'zip', 'dy2s']:
+        elif isinstance(node.ctx, gast.Load) and not hasattr(builtins, node.id):
             self._current_name_scope().r_vars.add(node.id)
     def visit_FunctionDef(self, node):
         def pre_func():

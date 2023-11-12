@@ -6,7 +6,7 @@ from .helpers import gast
 
 from .ast_utils import ast_to_source_code
 from .logging_utils import warn
-
+import importlib
 
 def index_in_list(array_list, item):
     try:
@@ -16,8 +16,8 @@ def index_in_list(array_list, item):
         return -1
 
 
-IVY_MODULE_PREFIX = 'ivy.'
-SUPPORTED_BACKENDS_PREFIX = ['torch.', 'tf.', 'jax.', 'jnp.', 'paddle.']
+IVY_MODULE_PREFIX = 'ivy'
+SUPPORTED_BACKENDS_PREFIX = ['torch', 'tf', 'jax', 'jnp', 'paddle']
 DYGRAPH_TO_STATIC_MODULE_PREFIX = 'control_flow_experimental.dy2static'
 
 
@@ -25,7 +25,15 @@ def is_internal_api(node):
     # Note: A api in module dygraph_to_static is not a real dygraph api.
     return is_api_in_module(node, DYGRAPH_TO_STATIC_MODULE_PREFIX)
 
-
+def is_builtin_api(node):
+    assert isinstance(node, gast.Call), "Input non-Call node for is_builtin_api"
+    func_str = astor.to_source(gast.gast_to_ast(node.func))
+    try:
+        func = func_str.strip().split('.')[-1]
+        return any([func in dir(cls) for cls in (list,dict,set,str)])
+    except Exception:
+        return False
+    
 def is_api_in_module(node, module_prefix):
     assert isinstance(node, gast.Call), "Input non-Call node for is_dygraph_api"
 
@@ -37,8 +45,8 @@ def is_api_in_module(node, module_prefix):
 
     func_str = astor.to_source(gast.gast_to_ast(func_node)).strip()
     try:
-        import ivy 
-        import control_flow_experimental.dy2static as dy2s
+        import control_flow_experimental.dy2static as dy2s 
+        globals()[module_prefix] = importlib.import_module(f"{module_prefix}")
 
         return eval(f"_is_api_in_module_helper({func_str}, '{module_prefix}')")
     except Exception:

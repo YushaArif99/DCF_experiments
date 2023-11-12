@@ -95,7 +95,7 @@ class OriginInfoAttacher(gast.NodeTransformer):
         self.visit(self.root)
 
     def visit(self, node):
-        if isinstance(node, gast.FunctionDef):
+        if isinstance(node, (gast.FunctionDef,gast.ClassDef)):
             self.current_func.append(node)
         if hasattr(node, "lineno"):
             self._attach_origin_info(node)
