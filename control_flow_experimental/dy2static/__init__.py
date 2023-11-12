@@ -13,6 +13,7 @@ from .convert_operators import bool_and, bool_or, unary_not # noqa: F401
 from .convert_operators import convert_to_f_string, transform_funcs # noqa: F401
 from .convert_operators import cast_to_bool, cast_to_float, cast_to_int # noqa: F401
 from .convert_operators import cast_to_dict, cast_to_set, cast_to_tuple, cast_to_list # noqa: F401
+from .convert_operators import initialize_comprehension # noqa: F401
 from .assert_transformer import AssertTransformer
 from .ast_transformer import DygraphToStaticAst
 from .program_translator import convert_to_static

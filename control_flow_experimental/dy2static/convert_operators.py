@@ -23,6 +23,9 @@ def unpack_by_structure(target, structure):
         raise AssertionError("structure element must be 1 or list")
     return ret
 
+def initialize_comprehension(kind):
+    assert kind in ('list', 'dict', 'set'), f"invalid argument for 'kind'={kind}"
+    return [] if kind=='list' else {} if kind=='dict' else set()
 
 def convert_len(var):
     return len(var)
@@ -198,6 +201,7 @@ def convert_to_f_string(func, *args):
     return f_string
 
 transform_funcs = {
+    "initialize_comprehension": initialize_comprehension,
     "bool_or": bool_or,
     "bool_and": bool_and,
     "unary_not": unary_not,
