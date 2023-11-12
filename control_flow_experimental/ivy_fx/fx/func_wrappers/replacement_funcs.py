@@ -1,5 +1,5 @@
 import ivy
-from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy, IvyShapeProxy, NativeShapeProxy
+from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy, IvyShapeProxy, ShapeProxy
 from typing import Any, Iterable, Union, Optional, Dict, Tuple, Callable
 import inspect
 import sys
@@ -29,7 +29,7 @@ def _to_native(x: Any, inplace: bool = False, to_ignore: tuple = ()) -> Any:
 def _to_ivy(x: Any) -> Any:
     if isinstance(x, (IvyProxy, ivy.Array)):
         return x
-    elif isinstance(x, NativeShapeProxy):  # TODO: add support for ShapeProxies
+    elif isinstance(x, ShapeProxy):  # TODO: add support for ShapeProxies
         return IvyShapeProxy(node=x.node, tracer=x.tracer, shape_proxy=x)
     elif isinstance(x, ivy.Container):
         return x.to_ivy()

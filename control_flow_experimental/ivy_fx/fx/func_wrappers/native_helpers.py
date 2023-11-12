@@ -1,6 +1,6 @@
 import ivy
 from .replacement_funcs import _args_to_ivy, _args_to_native, _to_ivy, _to_native
-from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy,IvyShapeProxy, NativeShapeProxy
+from control_flow_experimental.ivy_fx.fx.proxy import Proxy, IvyProxy, NativeProxy,IvyShapeProxy, ShapeProxy
 from typing import Any, Iterable, Union, Optional, Dict, Tuple, Callable
 import functools
 import warnings
