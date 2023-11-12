@@ -21,8 +21,13 @@ class CastTransformer(BaseTransformer):
     def visit_Call(self, node):
         self.generic_visit(node)
         func_str = ast_to_source_code(node.func).strip()
-        if func_str in self._castable_type and len(node.args) > 0:
-            args_str = ast_to_source_code(node.args[0]).strip()
+        if func_str in self._castable_type:
+            if node.args:
+                args_str = ast_to_source_code(node.args[0]).strip()
+            else:
+                assert func_str in ("list","tuple","set","dict"), f"cannot have empty args when calling {func_str}"
+                # Create an empty instance for lists/dicts/tuples etc.
+                args_str = '[]' if func_str in {'list', 'set', 'tuple'} else '{}'
             new_func_str = f"dy2s.cast_to_{func_str}({args_str})"
             new_node = gast.parse(new_func_str).body[0].value
             return new_node
