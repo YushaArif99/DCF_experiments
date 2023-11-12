@@ -31,7 +31,7 @@ from . import _pytree as pytree
 from ._compatibility import compatibility
 from .graph import _PyTreeCodeGen, _PyTreeInfo, Graph
 from .node import Argument, base_types, map_aggregate
-from .proxy import Proxy, ParameterProxy, IvyProxy, ProxyType, TracerBase, Scope, ScopeContextManager, _get_proxy_type
+from .proxy import Proxy, ParameterProxy, EagerProxy, ProxyType, TracerBase, Scope, ScopeContextManager, _get_proxy_type, _find_proxy
 from .graph_converter import tracer_to_ivy_graph
 from .func_wrappers import (
     replace_decorators,
@@ -73,7 +73,9 @@ _proxyable_classes: Dict[Type, None] = {}
 
 _is_fx_tracing_flag = False
 
+_tracing_mode = 'SYMBOLIC'
 
+_glob_tracer = None 
 """TODO (yusha): optimize the wrapping logic if possible. Maybe we can use the Patcher class
 to do the wrapping. Though we'll need to handle 2 cases: 
 - handling numpy ufuncs.
@@ -102,11 +104,11 @@ def _wrap_numpy_ufuncs(wrapped, original):
         wrapped.ntypes = original.ntypes
         wrapped.signature = original.signature
         wrapped.identity = original.identity
-        wrapped.reduce = _dummy_tracing_func(original.reduce)
-        wrapped.accumulate = _dummy_tracing_func(original.accumulate)
-        wrapped.reduceat = _dummy_tracing_func(original.reduceat)
-        wrapped.outer = _dummy_tracing_func(original.outer)
-        wrapped.at = _dummy_tracing_func(original.at)
+        wrapped.reduce = _symbolic_tracing_func(original.reduce)
+        wrapped.accumulate = _symbolic_tracing_func(original.accumulate)
+        wrapped.reduceat = _symbolic_tracing_func(original.reduceat)
+        wrapped.outer = _symbolic_tracing_func(original.outer)
+        wrapped.at = _symbolic_tracing_func(original.at)
 
         FUNC_TO_PATH[original.reduce] = "numpy." + original.__name__ + ".reduce"
         FUNC_TO_PATH[original.accumulate] = "numpy." + original.__name__ + ".accumulate"
@@ -337,7 +339,7 @@ def _wrap_functions_for_dummy_tracing(
         try:
             import functorch
 
-            functorch.vmap = _dummy_tracing_func(
+            functorch.vmap = _symbolic_tracing_func(
                 functorch.vmap,
             )
         except:
@@ -352,18 +354,18 @@ def _wrap_functions_for_dummy_tracing(
             hasattr(cls, "__getattr__") or hasattr(cls, "__getattribute__")
         )
         assert hasattr(cls, "__init__")
-        cls.__init__ = _dummy_tracing_func(
+        cls.__init__ = _symbolic_tracing_func(
             cls.__init__,
         )
-        cls.__setattr__ = _dummy_tracing_func(
+        cls.__setattr__ = _symbolic_tracing_func(
             cls.__setattr__,
         )
         if hasattr(cls, "__getattr__"):
-            cls.__getattr__ = _dummy_tracing_func(
+            cls.__getattr__ = _symbolic_tracing_func(
                 cls.__getattr__,
             )
         if hasattr(cls, "__getattribute__"):
-            cls.__getattribute__ = _dummy_tracing_func(
+            cls.__getattribute__ = _symbolic_tracing_func(
                 cls.__getattribute__,
             )
 
@@ -674,6 +676,7 @@ class Tracer(TracerBase):
         autowrap_functions: Tuple[Callable, ...] = (),
         param_shapes_constant: bool = False,
         name="main",
+        mode="SYMBOLIC",
     ) -> None:
         # This method's signature is overridden by the first line of this class'
         # docstring. If this method's signature is modified, the signature that
@@ -728,7 +731,10 @@ class Tracer(TracerBase):
 
         self.subgraphs = []
         self.name = name
-
+        self.mode = mode
+        # set the global tracer
+        global _glob_tracer 
+        _glob_tracer = self
     @compatibility(is_backward_compatible=True)
     def create_arg(self, a: Any) -> "Argument":
         """
@@ -1094,10 +1100,10 @@ class Tracer(TracerBase):
     
             if concrete_inputs is not None and name in concrete_inputs:
                 proxy_data = concrete_inputs[name]
-                proxy_type = _get_proxy_type(proxy_data)
+                proxy_type = ProxyType.EAGER_PROXY if self.mode == 'EAGER' else _get_proxy_type(proxy_data)
             else:
                 proxy_data = None
-                proxy_type = ProxyType.NATIVE_PROXY
+                proxy_type = ProxyType.EAGER_PROXY if self.mode == 'EAGER' else ProxyType.NATIVE_PROXY
 
             return self.create_proxy(
                 "placeholder",
@@ -1235,9 +1241,11 @@ class Tracer(TracerBase):
 
             A ``Graph`` representing the semantics of the passed-in ``root``.
         """
-        global _is_fx_tracing_flag
+        global _is_fx_tracing_flag, _tracing_mode
         old_is_fx_tracing_flag = _is_fx_tracing_flag
+        old_tracing_mode = _tracing_mode
         _is_fx_tracing_flag = True
+        _tracing_mode = self.mode
         try:
             if isinstance(root, torch.nn.Module):
                 self.root = root
@@ -1337,6 +1345,7 @@ class Tracer(TracerBase):
             self.submodule_paths = None
         finally:
             _is_fx_tracing_flag = old_is_fx_tracing_flag
+            _tracing_mode = old_tracing_mode
         return self.graph
 
     def __deepcopy__(self, memo):
@@ -1363,22 +1372,6 @@ _wrapped_fns_to_patch: List[Tuple[dict, str]] = []
 _wrapped_methods_to_patch: List[Tuple[type, str]] = []
 
 
-def _find_proxy(*objects_to_search):
-    """
-    Recursively search a data structure for a Proxy() and return it,
-    return None if not found.
-    """
-    proxy = None
-
-    def find_proxy(x):
-        nonlocal proxy
-        if isinstance(x, Proxy) and proxy is None:
-            proxy = x
-
-    map_aggregate(objects_to_search, find_proxy)
-    return proxy
-
-
 def _py_forloop(itr_, body, body_vars):
     for itr in itr_:
         body_vars = body(itr, *body_vars)
@@ -1396,7 +1389,7 @@ def _py_if_else(pred, true_fn, false_fn, cond_vars):
     else:
         return false_fn(*cond_vars)
 
-def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
+def _symbolic_tracing_func(orig_fn, to_ivy=False, frontend=None):
     """
     Given an closed-over ``orig_function`` to invoke, search the args and kwargs for
     a Proxy object. If there is one, emit a ``call_function`` node to preserve the
@@ -1556,11 +1549,16 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
             proxy = _find_proxy(args, kwargs)
             # Todo: search for the .data attribute inside _find_proxy
             if proxy is not None:
+                if hasattr(proxy, orig_fn.__qualname__):
+                    method = getattr(proxy,orig_fn.__qualname__)
+                    return method(*args[1:], **kwargs)
                 def determine_proxy_type_and_val(orig_fn, proxy):
                     fn_name = getattr(orig_fn, '__qualname__') 
                     backend = ivy.current_backend_str()
-                    if fn_name in glob.BUILTIN_SIDE_EFFECTS:
-                        proxy_type, val = ProxyType.BUILTIN_PROXY, glob.BUILTIN_SIDE_EFFECTS[fn_name]
+                    if fn_name in glob.BUILTIN_COLLECTIONS:
+                        proxy_type= eval('ProxyType.' + glob.BUILTIN_COLLECTIONS[fn_name])
+                        val = args + tuple(kwargs.values())
+                        val = val[0] if len(val) == 1 else val
                     elif fn_name in glob.SCALAR_SIDE_EFFECTS:
                         proxy_type, val = ProxyType.SCALAR_PROXY, glob.SCALAR_SIDE_EFFECTS[fn_name]
                     elif fn_name in glob.ARRAY_TO_SCALAR[backend]:
@@ -1585,6 +1583,200 @@ def _dummy_tracing_func(orig_fn, to_ivy=False, frontend=None):
     _wrap_numpy_ufuncs(wrapped, orig_fn)
     return wrapped
 
+def _eager_tracing_func(orig_fn, to_ivy=False, frontend=None):
+    """
+    Given an closed-over ``orig_function`` to invoke, search the args and kwargs for
+    an EagerProxy object. If there is one, emit a ``call_function`` node to preserve the
+    call to this leaf function directly. Simultaneously, also compute the results of invoking
+    the function to preserve the correctness of the underlying concrete value. If the function does
+    not contain any proxies,just return the results of this function call, as this function is not being traced.
+    """
+    is_already_wrapped = hasattr(orig_fn, "wrapped_for_tracing")
+
+    # do not wrap default __init__
+    if orig_fn is object.__init__:
+        return orig_fn
+
+    # Do not wrap the function:
+    # (a) if it's a special method but not in ARRAY_BUILTINS
+    # (b) if it's already wrapped
+    if (
+        (
+            hasattr(orig_fn, "__name__")
+            and (orig_fn.__name__[0] == "_" and orig_fn.__name__ not in glob.ARRAY_BUILTINS)
+            or (orig_fn.__name__ == "__getattribute__")
+        )
+        or is_already_wrapped
+        
+    ):
+        return orig_fn
+    
+    if orig_fn.__name__ in ("if_else", "if_exp"):
+        # Handle control flow ops
+        @functools.wraps(orig_fn)
+        def wrapped(*args, **kwargs):
+            proxy = _find_proxy(args, kwargs)
+            if proxy is None:
+                return orig_fn(*args, **kwargs)
+            
+            # Trace the callables passed as arguments to the control flow op
+            ret = None
+            subgs = []
+            pred_fn, true_fn, false_fn, cond_vars = args
+            const_args, concr_args, proxy_inputs = {}, {}, []
+            for k, v in cond_vars.items():
+                if isinstance(v, EagerProxy):
+                    proxy_inputs.append(v)
+                    concr_args[k] = v._concrete_val
+
+                elif isinstance(v, dy2s.UndefinedVar) or "__cond_" in k: 
+                    # if-else locals that need to be tracked
+                    concr_args[k] = v
+                else:
+                    const_args[k] = v
+
+            # check for static control flow
+            t = Tracer(name="pred_fn", mode='EAGER')
+            orig_vars = {key.replace("__cond_", ""): value for key, value in cond_vars.items()}
+            pred_g = t.trace(pred_fn, constant_args=orig_vars, args=(), to_ivy=to_ivy, frontend=frontend)
+            pred = t.orig_ret
+            try:
+                pred = pred[0] if isinstance(pred, (list, tuple)) else pred
+            except IndexError:
+                pred = False
+            if not isinstance(pred, Proxy):  # static control flow
+                # defer to pythonic if-else
+                return _py_if_else(pred, true_fn, false_fn, cond_vars.values())
+            else:
+                # compile both branches since the control flow is dynamic
+                for fn in args:
+                    if inspect.isfunction(fn):
+                        t = Tracer(name=f"{fn.__name__}",mode='EAGER')
+                        graph = t.trace(
+                            fn,
+                            constant_args=const_args,
+                            to_ivy= to_ivy,
+                            frontend=frontend,
+                            **concr_args,
+                        )
+                        subgs.append(graph)
+
+            nargs = map_aggregate(args, lambda a: a._concrete_val if isinstance(a,EagerProxy) else a)
+            nkwargs = map_aggregate(kwargs, lambda a: a._concrete_val if isinstance(a,EagerProxy) else a)
+            new_proxy = _find_proxy(nargs, nkwargs)
+            assert new_proxy is None, f"cannot perform computation with {type(new_proxy)} in args/kwargs"
+            ret = orig_fn(*nargs, **nkwargs)
+            
+            return_proxy = proxy.tracer.create_proxy(
+                "call_function", orig_fn, args, kwargs, data=ret, proxy_type=ProxyType.EAGER_PROXY, to_ivy=to_ivy
+            )
+            return_proxy.node.meta["is_wrapped"] = True
+            return_proxy.node.meta["orig_ret"] = ret
+            return_proxy.node.meta["pred"] = pred
+            return_proxy.node.meta["subgraphs"] = subgs
+            return return_proxy
+
+    elif orig_fn.__name__ == "while_loop":
+
+        @functools.wraps(orig_fn)
+        def wrapped(*args, **kwargs):
+            proxy = _find_proxy(args, kwargs)
+            if proxy is None:
+                return orig_fn(*args, **kwargs)
+            
+            # Trace the callables passed as arguments to the control flow op
+            ret = None
+            subgs = []
+            test_fn, body_fn, loop_vars = args
+            const_args, concr_args, proxy_inputs = {}, {}, []
+            for k, v in loop_vars.items():
+                if isinstance(v, EagerProxy):
+                    proxy_inputs.append(v)
+                    concr_args[k] = v._concrete_val
+                elif isinstance(v, dy2s.UndefinedVar) or any([substr in k for substr in ("__fl_", "__modified_")]): 
+                    # for loop locals that need to be tracked
+                    concr_args[k] = v
+                else:
+                    const_args[k] = v
+            # check for static control flow
+            #TODO: find a more efficient way of determining this. Currently,
+            # we run a single iteration of the loop to determine whether any
+            # loop vars returned are proxies. If not, the loop is static.
+            orig_vars = {key.replace("__modified_", ""): value for key, value in loop_vars.items()}
+            t = Tracer(name="body_fn", mode='EAGER')
+            body_g = t.trace(body_fn, constant_args=orig_vars, args=(), to_ivy=to_ivy, frontend=frontend)
+            new_vars = {k1: v2 for (k1, v1), v2 in zip(orig_vars.items(),t.orig_ret)} # new loop vars
+            t = Tracer(name="test_fn", mode= 'EAGER')
+            test_g = t.trace(test_fn, constant_args= new_vars, args=(), to_ivy=to_ivy, frontend=frontend)
+            test = t.orig_ret
+            try:
+                test = test[0] if isinstance(test, (list, tuple)) else test
+            except IndexError:
+                test = False 
+            iter_ = next((v for k, v in loop_vars.items() if "__for_loop_iter" in k), None)
+            if not isinstance(test, Proxy) or (iter_ is not None and _find_proxy(iter_) is None):  # static control flow
+                # defer to pythonic while loop
+                return _py_whileloop(test_fn, body_fn, loop_vars.values())
+            else:
+                # compile both callables since the control flow is dynamic
+                for fn in args:
+                    if inspect.isfunction(fn):
+                        t = Tracer(name=f"{fn.__name__}", mode='EAGER')
+                        graph = t.trace(
+                            fn,
+                            constant_args=const_args,
+                            to_ivy= to_ivy,
+                            frontend=frontend,
+                            **concr_args,
+                        )
+                        subgs.append(graph)
+
+            nargs = map_aggregate(args, lambda a: a._concrete_val if isinstance(a,EagerProxy) else a)
+            nkwargs = map_aggregate(kwargs, lambda a: a._concrete_val if isinstance(a,EagerProxy) else a)
+            new_proxy = _find_proxy(nargs, nkwargs)
+            assert new_proxy is None, f"cannot perform computation with {type(new_proxy)} in args/kwargs"
+            ret = orig_fn(*nargs, **nkwargs)
+            
+            return_proxy = proxy.tracer.create_proxy(
+                "call_function", orig_fn, args, kwargs, data=ret, proxy_type=ProxyType.EAGER_PROXY, to_ivy=to_ivy
+            )
+            return_proxy.node.meta["is_wrapped"] = True
+            return_proxy.node.meta["orig_ret"] = ret
+            return_proxy.node.meta["test"] = test
+            return_proxy.node.meta["subgraphs"] = subgs
+            return return_proxy
+
+    else:
+        @functools.wraps(orig_fn)
+        def wrapped(*args, **kwargs):
+            
+            if _not_to_trace(orig_fn, *args, **kwargs):
+                return orig_fn(*args, **kwargs)
+            
+            proxy = _find_proxy(args, kwargs)
+            if proxy is not None:
+                nargs = map_aggregate(args,lambda a: a._concrete_val if isinstance(a,EagerProxy) else a)
+                nkwargs = map_aggregate(kwargs, lambda a: a._concrete_val if isinstance(a,EagerProxy) else a)
+                new_proxy = _find_proxy(nargs, nkwargs)
+                assert new_proxy is None, f"cannot perform computation with {type(new_proxy)} in args/kwargs"
+                val = orig_fn(*nargs, **nkwargs)
+                return_proxy = proxy.tracer.create_proxy(
+                    "call_function", orig_fn, args, kwargs, data=val, proxy_type=ProxyType.EAGER_PROXY, to_ivy=to_ivy
+                )
+                return_proxy.node.meta["is_wrapped"] = True
+                return return_proxy
+            if orig_fn.__name__ == "initialize_comprehension":
+                # special function designed to trace initializations for list/dict/set comprehensions
+                res_ = orig_fn(*args,**kwargs)
+                func_, args_ = (dy2s.cast_to_dict, ({},)) if args[0] == 'dict' else (dy2s.cast_to_list, ([],)) if args[0] == 'list' else (dy2s.cast_to_set, ())
+                return _glob_tracer.create_proxy(
+                    "call_function", func_, args_, kwargs, data=res_, proxy_type=ProxyType.EAGER_PROXY, to_ivy=to_ivy
+                )
+            return orig_fn(*args, **kwargs)
+
+    wrapped.wrapped_for_tracing = True
+    _wrap_numpy_ufuncs(wrapped, orig_fn)
+    return wrapped
 
 def _create_wrapped_method(cls, name):
     orig_fn = getattr(cls, name)
@@ -1748,14 +1940,16 @@ def _patch_modules(
 def _patch_wrapped_functions(patcher: _Patcher):
     """
     Go through ``_wrapped_fn_patch_table`` and, for each frame object, wrap
-    the listed global functions in the `_dummy_tracing_func` wrapper.
+    the listed global functions in the `_symbolic_tracing_func` wrapper.
     """
+    global _tracing_mode
+    wrapping_func = _eager_tracing_func if _tracing_mode == 'EAGER' else _symbolic_tracing_func
     for frame_dict, name in _wrapped_fns_to_patch:
         if name not in frame_dict and hasattr(builtins, name):
             orig_fn = getattr(builtins, name)
         else:
             orig_fn = frame_dict[name]
-        patcher.patch(frame_dict, name, _dummy_tracing_func(orig_fn))
+        patcher.patch(frame_dict, name, wrapping_func(orig_fn))
 
     for cls, name in _wrapped_methods_to_patch:
         patcher.patch_method(cls, name, _create_wrapped_method(cls, name))
@@ -1775,7 +1969,7 @@ def _autowrap_check(
                 and callable(value)
                 and id(value) in function_ids
             ):
-                patcher.patch(frame_dict, name, _dummy_tracing_func(value))
+                patcher.patch(frame_dict, name, _symbolic_tracing_func(value))
 
 
 @compatibility(is_backward_compatible=True)
@@ -1838,9 +2032,6 @@ def wrap(fn_or_name: Union[str, Callable], dynamic: bool = False):
 
     # consider implementing Callable version of this via _autowrap_function_ids / _autowrap_search
     # semantics would be slightly different, but would add support `from x import wrapped_function`
-    if dynamic:
-        patcher = _Patcher()
-        patcher.patch(f.f_globals, fn_name, _dummy_tracing_func(fn_or_name))
     _wrapped_fns_to_patch.append((f.f_globals, fn_name))
     return fn_or_name
 
@@ -1857,6 +2048,7 @@ def symbolic_trace(
     control_flow: bool = False,
     debug_mode: bool = False,
     stateful: Optional[List] = [],
+    mode: str = 'SYMBOLIC',
     **kwargs,
 ) -> Graph:
     """
@@ -1924,11 +2116,13 @@ def symbolic_trace(
     """TODO(yusha): maybe move the backend framework wrapping to the Patcher as well in the future."""
     args = ivy.nested_map(lambda a: ivy.native_array(a) if ivy.is_array(a) else a, args, shallow=False)
     kwargs = ivy.nested_map(lambda a: ivy.native_array(a) if ivy.is_array(a) else a, kwargs, shallow=False)
+    wrapping_func = _eager_tracing_func if mode == 'EAGER' else _symbolic_tracing_func
+    
     # wrap the native backend functions
     _wrap_functions_for_dummy_tracing(
         to_ivy=to_ivy,
         with_numpy=with_numpy,
-        _wrap_fn= lambda fn: _dummy_tracing_func(fn, to_ivy=to_ivy),
+        _wrap_fn= lambda fn: wrapping_func(fn, to_ivy=to_ivy),
         path=None,
     )
 
@@ -1968,11 +2162,11 @@ def symbolic_trace(
 
         # explicitly wrap ivy control flow ops since we wont trace into tf.cond/jax.lax.cond etc.
         for f in [ivy.if_else, ivy.for_loop, ivy.while_loop]:
-            patcher.patch_method(ivy_modules[0], f.__name__, _dummy_tracing_func(f, to_ivy=to_ivy, frontend=frontend))
+            patcher.patch_method(ivy_modules[0], f.__name__, wrapping_func(f, to_ivy=to_ivy, frontend=frontend))
 
         # explicitly wrap all ast transform functions
         for name, f in dy2s.transform_funcs.items():
-            patcher.patch_method(dy2s, name, _dummy_tracing_func(f,to_ivy=to_ivy))
+            patcher.patch_method(dy2s, name, wrapping_func(f,to_ivy=to_ivy))
 
         # transform the root function if control_flow = True 
         if control_flow:
@@ -1986,7 +2180,7 @@ def symbolic_trace(
                     message="Error while AST transforming the function."
                 )
         try:
-            tracer = Tracer()
+            tracer = Tracer(mode=mode)
             if isinstance(root, IvyGraph):
                 root._scripted_call.constants = root.constants
                 fx_graph = tracer.trace(
